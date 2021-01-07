@@ -19,7 +19,7 @@ import classNames from "classnames"
 import ClickOutHandler from "react-onclickout"
 import { connect } from "react-redux"
 
-import logo from "../../img/logo2.svg"
+import logo from "../../img/logo.svg"
 import BucketSearch from "../buckets/BucketSearch"
 import BucketList from "../buckets/BucketList"
 import Host from "./Host"
