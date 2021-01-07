@@ -22,3 +22,6 @@ prime/
 stage/
 .sia_temp/
 config.json
+minio.exe
+.minio.sys
+package-lock.json
