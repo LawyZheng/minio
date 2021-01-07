@@ -3,7 +3,8 @@ module github.com/minio/minio
 go 1.14
 
 require (
-	cloud.google.com/go v0.39.0
+	cloud.google.com/go v0.46.3
+	cloud.google.com/go/storage v1.0.0
 	git.apache.org/thrift.git v0.13.0
 	github.com/Azure/azure-pipeline-go v0.2.2
 	github.com/Azure/azure-storage-blob-go v0.10.0
@@ -27,6 +28,7 @@ require (
 	github.com/fatih/color v1.10.0
 	github.com/fatih/structs v1.1.0
 	github.com/go-bindata/go-bindata v3.1.2+incompatible // indirect
+	github.com/go-delve/delve v1.5.1 // indirect
 	github.com/go-ole/go-ole v1.2.4 // indirect
 	github.com/go-sql-driver/mysql v1.5.0
 	github.com/gomodule/redigo v1.8.3
@@ -44,6 +46,7 @@ require (
 	github.com/mattn/go-colorable v0.1.8
 	github.com/mattn/go-ieproxy v0.0.1 // indirect
 	github.com/mattn/go-isatty v0.0.12
+	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/miekg/dns v1.1.35
 	github.com/minio/cli v1.22.0
 	github.com/minio/highwayhash v1.0.0
@@ -63,6 +66,7 @@ require (
 	github.com/ncw/directio v1.0.5
 	github.com/nsqio/go-nsq v1.0.8
 	github.com/olivere/elastic/v7 v7.0.22
+	github.com/peterh/liner v1.2.1 // indirect
 	github.com/philhofer/fwd v1.1.1 // indirect
 	github.com/pierrec/lz4 v2.5.2+incompatible
 	github.com/pkg/errors v0.9.1
@@ -70,9 +74,12 @@ require (
 	github.com/quasilyte/go-ruleguard/dsl/fluent v0.0.0-20201222093424-5d7e62a465d3 // indirect
 	github.com/rjeczalik/notify v0.9.2
 	github.com/rs/cors v1.7.0
+	github.com/russross/blackfriday v1.6.0 // indirect
+	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/secure-io/sio-go v0.3.0
 	github.com/shirou/gopsutil v3.20.11+incompatible
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
+	github.com/spf13/cobra v1.1.1 // indirect
 	github.com/streadway/amqp v1.0.0
 	github.com/tidwall/gjson v1.3.5
 	github.com/tidwall/sjson v1.0.4
@@ -82,12 +89,14 @@ require (
 	github.com/willf/bloom v2.0.3+incompatible
 	github.com/xdg/scram v0.0.0-20180814205039-7eeb5667e42c
 	go.etcd.io/etcd v0.0.0-20201125193152-8a03d2e9614b
+	go.starlark.net v0.0.0-20201210151846-e81fc95f7bd5 // indirect
+	golang.org/x/arch v0.0.0-20210105144330-cfa462d59626 // indirect
 	golang.org/x/crypto v0.0.0-20201124201722-c8d3bf9c5392
 	golang.org/x/net v0.0.0-20201216054612-986b41b23924
-	golang.org/x/sys v0.0.0-20201119102817-f84b799fce68
+	golang.org/x/sys v0.0.0-20210105210732-16f7687f5001
 	golang.org/x/tools v0.0.0-20200929223013-bf155c11ec6f // indirect
-	google.golang.org/api v0.5.0
+	google.golang.org/api v0.13.0
 	gopkg.in/jcmturner/gokrb5.v7 v7.5.0
 	gopkg.in/ldap.v3 v3.0.3
-	gopkg.in/yaml.v2 v2.3.0
+	gopkg.in/yaml.v2 v2.4.0
 )

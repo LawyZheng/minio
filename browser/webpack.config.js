@@ -29,7 +29,7 @@ var exports = {
   output: {
     path: path.resolve(__dirname, 'dev'),
     filename: 'index_bundle.js',
-    publicPath: '/minio/'
+    publicPath: '/kayisoft/'
   },
   module: {
     rules: [{
@@ -69,23 +69,23 @@ var exports = {
   },
   devServer: {
     historyApiFallback: {
-      index: '/minio/'
+      index: '/kayisoft/'
     },
     proxy: {
-      '/minio/webrpc': {
+      '/kayisoft/webrpc': {
         target: 'http://localhost:9000',
         secure: false,
         headers: {'Host': "localhost:9000"}
       },
-      '/minio/upload/*': {
+      '/kayisoft/upload/*': {
         target: 'http://localhost:9000',
         secure: false
       },
-      '/minio/download/*': {
+      '/kayisoft/download/*': {
         target: 'http://localhost:9000',
         secure: false
       },
-      '/minio/zip': {
+      '/kayisoft/zip': {
         target: 'http://localhost:9000',
         secure: false
       }
