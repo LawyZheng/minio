@@ -29,7 +29,7 @@ var exports = {
   output: {
     path: path.resolve(__dirname, 'dev'),
     filename: 'index_bundle.js',
-    publicPath: '/kayisoft/'
+    publicPath: '/tfs/'
   },
   module: {
     rules: [{
@@ -69,23 +69,23 @@ var exports = {
   },
   devServer: {
     historyApiFallback: {
-      index: '/kayisoft/'
+      index: '/tfs/'
     },
     proxy: {
-      '/kayisoft/webrpc': {
+      '/tfs/webrpc': {
         target: 'http://localhost:9000',
         secure: false,
         headers: {'Host': "localhost:9000"}
       },
-      '/kayisoft/upload/*': {
+      '/tfs/upload/*': {
         target: 'http://localhost:9000',
         secure: false
       },
-      '/kayisoft/download/*': {
+      '/tfs/download/*': {
         target: 'http://localhost:9000',
         secure: false
       },
-      '/kayisoft/zip': {
+      '/tfs/zip': {
         target: 'http://localhost:9000',
         secure: false
       }
