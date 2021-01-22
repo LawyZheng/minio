@@ -284,7 +284,41 @@ func checkRequestAuthType(ctx context.Context, r *http.Request, action policy.Ac
 func checkRequestAuthTypeToAccessKey(ctx context.Context, r *http.Request, action policy.Action, bucketName, objectName string) (accessKey string, owner bool, s3Err APIErrorCode) {
 	var cred auth.Credentials
 	switch getRequestAuthType(r) {
-	case authTypeUnknown, authTypeStreamingSigned:
+	case authTypeUnknown:
+		if action != policy.ListAllMyBucketsAction && cred.AccessKey == "" {
+			// Anonymous checks are not meant for ListBuckets action
+			if globalPolicySys.IsAllowed(policy.Args{
+				AccountName:     cred.AccessKey,
+				Action:          action,
+				BucketName:      bucketName,
+				ConditionValues: getConditionValues(r, "", "", nil),
+				IsOwner:         false,
+				ObjectName:      objectName,
+			}) {
+				// Request is allowed return the appropriate access key.
+				return cred.AccessKey, owner, ErrNone
+			}
+
+			if action == policy.ListBucketVersionsAction {
+				// In AWS S3 s3:ListBucket permission is same as s3:ListBucketVersions permission
+				// verify as a fallback.
+				if globalPolicySys.IsAllowed(policy.Args{
+					AccountName:     cred.AccessKey,
+					Action:          policy.ListBucketAction,
+					BucketName:      bucketName,
+					ConditionValues: getConditionValues(r, "", "", nil),
+					IsOwner:         false,
+					ObjectName:      objectName,
+				}) {
+					// Request is allowed return the appropriate access key.
+					return cred.AccessKey, owner, ErrNone
+				}
+			}
+			return cred.AccessKey, owner, ErrAccessDenied
+		}
+		return accessKey, owner, ErrSignatureVersionNotSupported
+
+	case authTypeStreamingSigned:
 		return accessKey, owner, ErrSignatureVersionNotSupported
 	case authTypePresignedV2, authTypeSignedV2:
 		if s3Err = isReqAuthenticatedV2(r); s3Err != ErrNone {
@@ -477,6 +511,7 @@ var supportedS3AuthTypes = map[authType]struct{}{
 	authTypeSignedV2:        {},
 	authTypePostPolicy:      {},
 	authTypeStreamingSigned: {},
+	authTypeUnknown:         {},
 }
 
 // Validate if the authType is valid and supported.

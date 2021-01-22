@@ -177,7 +177,7 @@ func TestS3SupportedAuthType(t *testing.T) {
 		// Test 9 - unknown auth header is not supported s3 type.
 		{
 			authT: authTypeUnknown,
-			pass:  false,
+			pass:  true,
 		},
 		// Test 10 - some new auth type is not supported s3 type.
 		{

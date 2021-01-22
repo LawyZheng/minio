@@ -73,13 +73,13 @@ build: checks
 
 # Builds minio windows.
 build-windows: checks
-	@echo "Building minio binary to './minio.exe'"
-	@GO111MODULE=on CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags kqueue -trimpath --ldflags "$(LDFLAGS)" -o $(PWD)/minio.exe 1>/dev/null
+	@echo "Building minio binary to './TMFileSystem.exe'"
+	@GO111MODULE=on CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags kqueue -trimpath --ldflags "$(LDFLAGS)" -o $(PWD)/TMFileSystem.exe 1>/dev/null
 
 # Builds minio linux.
 build-linux: checks
-	@echo "Building minio binary to './minio'"
-	@GO111MODULE=on CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags kqueue -trimpath --ldflags "$(LDFLAGS)" -o $(PWD)/minio 1>/dev/null
+	@echo "Building minio binary to './TMFileSystem'"
+	@GO111MODULE=on CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags kqueue -trimpath --ldflags "$(LDFLAGS)" -o $(PWD)/TMFileSystem 1>/dev/null
 
 hotfix: LDFLAGS := $(shell MINIO_RELEASE="RELEASE" MINIO_HOTFIX="hotfix" go run buildscripts/gen-ldflags.go $(shell git describe --tags --abbrev=0 | \
     sed 's#RELEASE\.\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)T\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)Z#\1-\2-\3T\4:\5:\6Z#'))
