@@ -21,6 +21,7 @@ package cmd
 import (
 	"io"
 	"os"
+	"strings"
 	"syscall"
 )
 
@@ -92,6 +93,13 @@ func readDirN(dirPath string, count int) (entries []string, err error) {
 		for _, fi := range fis {
 			// Not need to follow symlink.
 			if fi.Mode()&os.ModeSymlink == os.ModeSymlink {
+				// contains "." is a file
+				if strings.ContainsAny(fi.Name(), ".") {
+					entries = append(entries, fi.Name())
+					// not contains "." is a dir
+				} else {
+					entries = append(entries, fi.Name()+SlashSeparator)
+				}
 				continue
 			}
 			if fi.Mode().IsDir() {

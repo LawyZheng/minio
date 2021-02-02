@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -119,9 +120,9 @@ func readDirFilterFn(dirPath string, filter func(name string, typ os.FileMode) e
 		if len(name) == 0 || bytes.Equal(name, []byte{'.'}) || bytes.Equal(name, []byte{'.', '.'}) {
 			continue
 		}
-		if typ&os.ModeSymlink == os.ModeSymlink {
-			continue
-		}
+		// if typ&os.ModeSymlink == os.ModeSymlink {
+		// 	continue
+		// }
 		if err = filter(string(name), typ); err == errDoneForNow {
 			// filtering requested to return by caller.
 			return nil
@@ -190,6 +191,17 @@ func readDirN(dirPath string, count int) (entries []string, err error) {
 			typ = fi.Mode() & os.ModeType
 		}
 		if typ&os.ModeSymlink == os.ModeSymlink {
+			// Use temp buffer to append a slash to avoid string concat.
+			// contains "." is a file
+			if strings.ContainsAny(string(name), ".") {
+				entries = append(entries, string(name))
+				// not contains "." is a dir
+			} else {
+				tmp = tmp[:len(name)+1]
+				copy(tmp, name)
+				tmp[len(tmp)-1] = '/' // SlashSeparator
+				entries = append(entries, string(tmp))
+			}
 			continue
 		}
 		if typ.IsRegular() {

@@ -21,6 +21,7 @@ package cmd
 import (
 	"io"
 	"os"
+	"strings"
 	"syscall"
 )
 
@@ -56,12 +57,17 @@ func readDirFilterFn(dirPath string, filter func(name string, typ os.FileMode) e
 		if name == "" || name == "." || name == ".." { // Useless names
 			continue
 		}
-		if data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-			continue
-		}
+		// if data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		// 	continue
+		// }
 		var typ os.FileMode = 0 // regular file
 		if data.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 {
 			typ = os.ModeDir
+		}
+		if data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+			if !strings.ContainsAny(name, ".") {
+				typ = os.ModeDir
+			}
 		}
 		if e = filter(name, typ); e == errDoneForNow {
 			// filtering requested to return by caller.
@@ -108,6 +114,13 @@ func readDirN(dirPath string, count int) (entries []string, err error) {
 		}
 		switch {
 		case data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0:
+			// contains "." is a file
+			if strings.ContainsAny(name, ".") {
+				entries = append(entries, name)
+				// not contains "." is a dir
+			} else {
+				entries = append(entries, name+SlashSeparator)
+			}
 			continue
 		case data.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0:
 			entries = append(entries, name+SlashSeparator)
