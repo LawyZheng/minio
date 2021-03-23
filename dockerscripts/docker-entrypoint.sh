@@ -16,9 +16,9 @@
 #
 
 # If command starts with an option, prepend minio.
-if [ "${1}" != "minio" ]; then
+if [ "${1}" != "TMFileSystem" ]; then
     if [ -n "${1}" ]; then
-        set -- minio "$@"
+        set -- TMFileSystem "$@"
     fi
 fi
 
