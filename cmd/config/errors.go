@@ -30,6 +30,12 @@ var (
 		"Can only accept `on` and `off` values. To enable O_SYNC for fs backend, set this value to `on`",
 	)
 
+	ErrOverlappingDomainValue = newErrFn(
+		"Overlapping domain values",
+		"Please check the passed value",
+		"MINIO_DOMAIN only accepts non-overlapping domain values",
+	)
+
 	ErrInvalidDomainValue = newErrFn(
 		"Invalid domain value",
 		"Please check the passed value",
@@ -274,5 +280,11 @@ Example 1:
 		"Invalid gateway SSE configuration",
 		"",
 		"Refer to https://docs.min.io/docs/minio-kms-quickstart-guide.html for setting up SSE",
+	)
+
+	ErrInvalidReplicationWorkersValue = newErrFn(
+		"Invalid value for replication workers",
+		"",
+		"MINIO_API_REPLICATION_WORKERS: should be > 0",
 	)
 )

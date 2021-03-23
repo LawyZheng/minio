@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -48,7 +50,11 @@ type partialOperation struct {
 type erasureObjects struct {
 	GatewayUnsupported
 
-	setDriveCount int
+	setDriveCount      int
+	defaultParityCount int
+
+	setIndex  int
+	poolIndex int
 
 	// getDisks returns list of storageAPIs.
 	getDisks func() []StorageAPI
@@ -67,6 +73,8 @@ type erasureObjects struct {
 	bp *bpool.BytePoolCap
 
 	mrfOpCh chan partialOperation
+
+	deletedCleanupSleeper *dynamicSleeper
 }
 
 // NewNSLock - initialize a new namespace RWLocker instance.
@@ -179,7 +187,7 @@ func getDisksInfo(disks []StorageAPI, endpoints []string) (disksInfo []madmin.Di
 			}
 			info, err := disks[index].DiskInfo(context.TODO())
 			di := madmin.Disk{
-				Endpoint:       endpoints[index],
+				Endpoint:       info.Endpoint,
 				DrivePath:      info.MountPath,
 				TotalSpace:     info.Total,
 				UsedSpace:      info.Used,
@@ -188,6 +196,23 @@ func getDisksInfo(disks []StorageAPI, endpoints []string) (disksInfo []madmin.Di
 				RootDisk:       info.RootDisk,
 				Healing:        info.Healing,
 				State:          diskErrToDriveState(err),
+			}
+			di.PoolIndex, di.SetIndex, di.DiskIndex = disks[index].GetDiskLoc()
+			if info.Healing {
+				if hi := disks[index].Healing(); hi != nil {
+					hd := hi.toHealingDisk()
+					di.HealInfo = &hd
+				}
+			}
+			di.Metrics = &madmin.DiskMetrics{
+				APILatencies: make(map[string]string),
+				APICalls:     make(map[string]uint64),
+			}
+			for k, v := range info.Metrics.APILatencies {
+				di.Metrics.APILatencies[k] = v
+			}
+			for k, v := range info.Metrics.APICalls {
+				di.Metrics.APICalls[k] = v
 			}
 			if info.Total > 0 {
 				di.Utilization = float64(info.Used / info.Total * 100)
@@ -211,7 +236,7 @@ func getStorageInfo(disks []StorageAPI, endpoints []string) (StorageInfo, []erro
 		Disks: disksInfo,
 	}
 
-	storageInfo.Backend.Type = BackendErasure
+	storageInfo.Backend.Type = madmin.Erasure
 	return storageInfo, errs
 }
 
@@ -222,18 +247,98 @@ func (er erasureObjects) StorageInfo(ctx context.Context) (StorageInfo, []error)
 	return getStorageInfo(disks, endpoints)
 }
 
-// CrawlAndGetDataUsage will start crawling buckets and send updated totals as they are traversed.
+// LocalStorageInfo - returns underlying local storage statistics.
+func (er erasureObjects) LocalStorageInfo(ctx context.Context) (StorageInfo, []error) {
+	disks := er.getLocalDisks()
+	endpoints := make([]string, len(disks))
+	for i, disk := range disks {
+		if disk != nil {
+			endpoints[i] = disk.String()
+		}
+	}
+	return getStorageInfo(disks, endpoints)
+}
+
+func (er erasureObjects) getOnlineDisksWithHealing() (newDisks []StorageAPI, healing bool) {
+	var wg sync.WaitGroup
+	disks := er.getDisks()
+	infos := make([]DiskInfo, len(disks))
+	for _, i := range hashOrder(UTCNow().String(), len(disks)) {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			disk := disks[i-1]
+
+			if disk == nil {
+				infos[i-1].Error = "nil disk"
+				return
+			}
+
+			di, err := disk.DiskInfo(context.Background())
+			if err != nil {
+				// - Do not consume disks which are not reachable
+				//   unformatted or simply not accessible for some reason.
+				//
+				//
+				// - Future: skip busy disks
+				infos[i-1].Error = err.Error()
+				return
+			}
+
+			infos[i-1] = di
+		}()
+	}
+	wg.Wait()
+
+	for i, info := range infos {
+		// Check if one of the drives in the set is being healed.
+		// this information is used by scanner to skip healing
+		// this erasure set while it calculates the usage.
+		if info.Healing || info.Error != "" {
+			healing = true
+			continue
+		}
+		newDisks = append(newDisks, disks[i])
+	}
+
+	return newDisks, healing
+}
+
+// Clean-up previously deleted objects. from .minio.sys/tmp/.trash/
+func (er erasureObjects) cleanupDeletedObjects(ctx context.Context) {
+	// run multiple cleanup's local to this server.
+	var wg sync.WaitGroup
+	for _, disk := range er.getLoadBalancedLocalDisks() {
+		if disk != nil {
+			wg.Add(1)
+			go func(disk StorageAPI) {
+				defer wg.Done()
+				diskPath := disk.Endpoint().Path
+				readDirFn(pathJoin(diskPath, minioMetaTmpDeletedBucket), func(ddir string, typ os.FileMode) error {
+					wait := er.deletedCleanupSleeper.Timer(ctx)
+					removeAll(pathJoin(diskPath, minioMetaTmpDeletedBucket, ddir))
+					wait()
+					return nil
+				})
+			}(disk)
+		}
+	}
+	wg.Wait()
+}
+
+// nsScanner will start scanning buckets and send updated totals as they are traversed.
 // Updates are sent on a regular basis and the caller *must* consume them.
-func (er erasureObjects) crawlAndGetDataUsage(ctx context.Context, buckets []BucketInfo, bf *bloomFilter, updates chan<- dataUsageCache) error {
+func (er erasureObjects) nsScanner(ctx context.Context, buckets []BucketInfo, bf *bloomFilter, updates chan<- dataUsageCache) error {
 	if len(buckets) == 0 {
-		logger.Info(color.Green("data-crawl:") + " No buckets found, skipping crawl")
 		return nil
 	}
 
-	// Collect disks we can use, sorted by least inode usage.
-	disks := er.getOnlineDisksSortedByUsedInodes()
+	// Collect disks we can use.
+	disks, healing := er.getOnlineDisksWithHealing()
 	if len(disks) == 0 {
-		logger.Info(color.Green("data-crawl:") + " all disks are offline or being healed, skipping crawl")
+		logger.Info(color.Green("data-scanner:") + " all disks are offline or being healed, skipping scanner")
 		return nil
 	}
 
@@ -246,6 +351,11 @@ func (er erasureObjects) crawlAndGetDataUsage(ctx context.Context, buckets []Buc
 			continue
 		}
 		id, _ := disk.GetDiskID()
+		if id == "" {
+			// its possible that disk is unformatted
+			// or just went offline
+			continue
+		}
 		allDiskIDs = append(allDiskIDs, id)
 	}
 
@@ -291,7 +401,8 @@ func (er erasureObjects) crawlAndGetDataUsage(ctx context.Context, buckets []Buc
 	var saverWg sync.WaitGroup
 	saverWg.Add(1)
 	go func() {
-		const updateTime = 30 * time.Second
+		// Add jitter to the update time so multiple sets don't sync up.
+		var updateTime = 30*time.Second + time.Duration(float64(10*time.Second)*rand.Float64())
 		t := time.NewTicker(updateTime)
 		defer t.Stop()
 		defer saverWg.Done()
@@ -324,7 +435,7 @@ func (er erasureObjects) crawlAndGetDataUsage(ctx context.Context, buckets []Buc
 		}
 	}()
 
-	// Start one crawler per disk
+	// Start one scanner per disk
 	var wg sync.WaitGroup
 	wg.Add(len(disks))
 	for i := range disks {
@@ -347,6 +458,7 @@ func (er erasureObjects) crawlAndGetDataUsage(ctx context.Context, buckets []Buc
 					cache.Info.Name = bucket.Name
 				}
 				cache.Info.BloomFilter = bloom
+				cache.Info.SkipHealing = healing
 				cache.Disks = allDiskIDs
 				if cache.Info.Name != bucket.Name {
 					logger.LogIf(ctx, fmt.Errorf("cache name mismatch: %s != %s", cache.Info.Name, bucket.Name))
@@ -360,12 +472,13 @@ func (er erasureObjects) crawlAndGetDataUsage(ctx context.Context, buckets []Buc
 				// Calc usage
 				before := cache.Info.LastUpdate
 				var err error
-				cache, err = disk.CrawlAndGetDataUsage(ctx, cache)
+				cache, err = disk.NSScanner(ctx, cache)
 				cache.Info.BloomFilter = nil
 				if err != nil {
-					logger.LogIf(ctx, err)
-					if cache.Info.LastUpdate.After(before) {
+					if !cache.Info.LastUpdate.IsZero() && cache.Info.LastUpdate.After(before) {
 						logger.LogIf(ctx, cache.save(ctx, er, cacheName))
+					} else {
+						logger.LogIf(ctx, err)
 					}
 					continue
 				}
@@ -374,11 +487,15 @@ func (er erasureObjects) crawlAndGetDataUsage(ctx context.Context, buckets []Buc
 				if r := cache.root(); r != nil {
 					root = cache.flatten(*r)
 				}
+				t := time.Now()
 				bucketResults <- dataUsageEntryInfo{
 					Name:   cache.Info.Name,
 					Parent: dataUsageRoot,
 					Entry:  root,
 				}
+				// We want to avoid synchronizing up all writes in case
+				// the results are piled up.
+				time.Sleep(time.Duration(float64(time.Since(t)) * rand.Float64()))
 				// Save cache
 				logger.LogIf(ctx, cache.save(ctx, er, cacheName))
 			}

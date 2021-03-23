@@ -78,7 +78,7 @@ minio.exe server D:\Photos
 
 ## FreeBSD
 ### Port
-使用 [pkg](https://github.com/freebsd/pkg)进行安装，, MinIO官方并没有提供FreeBSD二进制文件， 它由FreeBSD上游维护，点击 [这里](https://www.freshports.org/www/minio)查看。
+使用 [pkg](https://github.com/freebsd/pkg)进行安装，MinIO官方并没有提供FreeBSD二进制文件， 它由FreeBSD上游维护，点击 [这里](https://www.freshports.org/www/minio)查看。
 
 ```sh
 pkg install minio
@@ -89,7 +89,7 @@ service minio start
 
 ## 使用源码安装
 
-采用源码安装仅供开发人员和高级用户使用,如果你还没有Golang环境， 请参考 [How to install Golang](https://golang.org/doc/install)。最低需要Golang版本为 [go1.14](https://golang.org/dl/#stable)
+采用源码安装仅供开发人员和高级用户使用,如果你还没有Golang环境， 请参考 [How to install Golang](https://golang.org/doc/install)。最低需要Golang版本为 [go1.16](https://golang.org/dl/#stable)
 
 ```sh
 GO111MODULE=on go get github.com/minio/minio
@@ -179,7 +179,7 @@ mc admin update <minio alias, e.g., myminio>
 - 对于联盟部署模式，应分别针对每个群集运行`mc admin update`。 在成功更新所有群集之前，不要将`mc`更新为任何新版本。
 - 如果将`kes`用作MinIO的KMS，只需替换二进制文件并重新启动`kes`，可以在 [这里](https://github.com/minio/kes/wiki) 找到有关`kes`的更多信息。
 - 如果将Vault作为MinIO的KMS，请确保已遵循如下Vault升级过程的概述：https://www.vaultproject.io/docs/upgrading/index.html
-- 如果将MindIO与etcd配合使用, 请确保已遵循如下etcd升级过程的概述: https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrading-etcd.md
+- 如果将MinIO与etcd配合使用, 请确保已遵循如下etcd升级过程的概述: https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrading-etcd.md
 
 ## 了解更多
 - [MinIO纠删码入门](https://docs.min.io/docs/minio-erasure-code-quickstart-guide)
@@ -190,7 +190,7 @@ mc admin update <minio alias, e.g., myminio>
 - [MinIO文档](https://docs.min.io)
 
 ## 如何参与到MinIO项目
-请参考 [贡献者指南](https://github.com/minio/minio/blob/master/CONTRIBUTING.md)。欢迎各位中国程序员加到MinIO项目中。
+请参考 [贡献者指南](https://github.com/minio/minio/blob/master/CONTRIBUTING.md)。欢迎各位中国程序员加入到MinIO项目中。
 
 ## 授权许可
 MinIO的使用受 Apache 2.0 License 约束，你可以在 [LICENSE](./LICENSE) 查看许可。

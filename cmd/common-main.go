@@ -17,6 +17,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/gob"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,21 +43,36 @@ import (
 	"github.com/minio/minio/pkg/certs"
 	"github.com/minio/minio/pkg/console"
 	"github.com/minio/minio/pkg/env"
+	"github.com/minio/minio/pkg/handlers"
 )
 
 // serverDebugLog will enable debug printing
 var serverDebugLog = env.Get("_MINIO_SERVER_DEBUG", config.EnableOff) == config.EnableOn
 
 func init() {
+	rand.Seed(time.Now().UTC().UnixNano())
+
 	logger.Init(GOPATH, GOROOT)
 	logger.RegisterError(config.FmtError)
 
-	rand.Seed(time.Now().UTC().UnixNano())
-	globalDNSCache = xhttp.NewDNSCache(10*time.Second, 10*time.Second)
+	// Inject into config package.
+	config.Logger.Info = logger.Info
+	config.Logger.LogIf = logger.LogIf
+
+	globalDNSCache = xhttp.NewDNSCache(10*time.Second, 10*time.Second, logger.LogOnceIf)
 
 	initGlobalContext()
 
-	globalReplicationState = newReplicationState()
+	globalForwarder = handlers.NewForwarder(&handlers.Forwarder{
+		PassHost:     true,
+		RoundTripper: newGatewayHTTPTransport(1 * time.Hour),
+		Logger: func(err error) {
+			if err != nil && !errors.Is(err, context.Canceled) {
+				logger.LogIf(GlobalContext, err)
+			}
+		},
+	})
+
 	globalTransitionState = newTransitionState()
 
 	console.SetColor("Debug", color.New())
@@ -240,6 +257,14 @@ func handleCommonEnvVars() {
 					"Invalid MINIO_DOMAIN value in environment variable")
 			}
 			globalDomainNames = append(globalDomainNames, domainName)
+		}
+		sort.Strings(globalDomainNames)
+		lcpSuf := lcpSuffix(globalDomainNames)
+		for _, domainName := range globalDomainNames {
+			if domainName == lcpSuf && len(globalDomainNames) > 1 {
+				logger.Fatal(config.ErrOverlappingDomainValue(nil).Msg("Overlapping domains `%s` not allowed", globalDomainNames),
+					"Invalid MINIO_DOMAIN value in environment variable")
+			}
 		}
 	}
 

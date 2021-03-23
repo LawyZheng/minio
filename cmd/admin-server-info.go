@@ -17,8 +17,11 @@
 package cmd
 
 import (
+	"context"
 	"net/http"
+	"time"
 
+	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/madmin"
 )
 
@@ -39,33 +42,38 @@ func getLocalServerProperty(endpointServerPools EndpointServerPools, r *http.Req
 			}
 			if endpoint.IsLocal {
 				// Only proceed for local endpoints
-				network[nodeName] = "online"
+				network[nodeName] = string(madmin.ItemOnline)
 				localEndpoints = append(localEndpoints, endpoint)
 				continue
 			}
 			_, present := network[nodeName]
 			if !present {
-				if err := IsServerResolvable(endpoint); err == nil {
-					network[nodeName] = "online"
+				if err := isServerResolvable(endpoint, 2*time.Second); err == nil {
+					network[nodeName] = string(madmin.ItemOnline)
 				} else {
-					network[nodeName] = "offline"
+					network[nodeName] = string(madmin.ItemOffline)
+					// log once the error
+					logger.LogOnceIf(context.Background(), err, nodeName)
 				}
 			}
 		}
 	}
 
-	localDisks, _ := initStorageDisksWithErrors(localEndpoints)
-	defer closeStorageDisks(localDisks)
-
-	storageInfo, _ := getStorageInfo(localDisks, localEndpoints.GetAllStrings())
-
-	return madmin.ServerProperties{
-		State:    "ok",
+	props := madmin.ServerProperties{
+		State:    string(madmin.ItemInitializing),
 		Endpoint: addr,
 		Uptime:   UTCNow().Unix() - globalBootTime.Unix(),
 		Version:  Version,
 		CommitID: CommitID,
 		Network:  network,
-		Disks:    storageInfo.Disks,
 	}
+
+	objLayer := newObjectLayerFn()
+	if objLayer != nil {
+		storageInfo, _ := objLayer.LocalStorageInfo(GlobalContext)
+		props.State = string(madmin.ItemOnline)
+		props.Disks = storageInfo.Disks
+	}
+
+	return props
 }

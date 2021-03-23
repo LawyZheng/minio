@@ -40,6 +40,7 @@ import (
 	xhttp "github.com/minio/minio/cmd/http"
 	xjwt "github.com/minio/minio/cmd/jwt"
 	"github.com/minio/minio/cmd/logger"
+	xnet "github.com/minio/minio/pkg/net"
 )
 
 var errDiskStale = errors.New("disk stale")
@@ -156,7 +157,7 @@ func (s *storageRESTServer) DiskInfoHandler(w http.ResponseWriter, r *http.Reque
 	logger.LogIf(r.Context(), msgp.Encode(w, &info))
 }
 
-func (s *storageRESTServer) CrawlAndGetDataUsageHandler(w http.ResponseWriter, r *http.Request) {
+func (s *storageRESTServer) NSScannerHandler(w http.ResponseWriter, r *http.Request) {
 	if !s.IsValid(w, r) {
 		return
 	}
@@ -172,7 +173,7 @@ func (s *storageRESTServer) CrawlAndGetDataUsageHandler(w http.ResponseWriter, r
 	}
 
 	resp := streamHTTPResponse(w)
-	usageInfo, err := s.storage.CrawlAndGetDataUsage(r.Context(), cache)
+	usageInfo, err := s.storage.NSScanner(r.Context(), cache)
 	if err != nil {
 		resp.CloseWithError(err)
 		return
@@ -286,10 +287,10 @@ func (s *storageRESTServer) CreateFileHandler(w http.ResponseWriter, r *http.Req
 		s.writeErrorResponse(w, err)
 		return
 	}
-	err = s.storage.CreateFile(r.Context(), volume, filePath, int64(fileSize), r.Body)
-	if err != nil {
-		s.writeErrorResponse(w, err)
-	}
+
+	done := keepHTTPResponseAlive(w)
+	done(s.storage.CreateFile(r.Context(), volume, filePath, int64(fileSize), r.Body))
+	w.(http.Flusher).Flush()
 }
 
 // DeleteVersion delete updated metadata.
@@ -300,6 +301,11 @@ func (s *storageRESTServer) DeleteVersionHandler(w http.ResponseWriter, r *http.
 	vars := mux.Vars(r)
 	volume := vars[storageRESTVolume]
 	filePath := vars[storageRESTFilePath]
+	forceDelMarker, err := strconv.ParseBool(vars[storageRESTForceDelMarker])
+	if err != nil {
+		s.writeErrorResponse(w, errInvalidArgument)
+		return
+	}
 
 	if r.ContentLength < 0 {
 		s.writeErrorResponse(w, errInvalidArgument)
@@ -312,7 +318,7 @@ func (s *storageRESTServer) DeleteVersionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
-	err := s.storage.DeleteVersion(r.Context(), volume, filePath, fi)
+	err = s.storage.DeleteVersion(r.Context(), volume, filePath, fi, forceDelMarker)
 	if err != nil {
 		s.writeErrorResponse(w, err)
 	}
@@ -327,11 +333,18 @@ func (s *storageRESTServer) ReadVersionHandler(w http.ResponseWriter, r *http.Re
 	volume := vars[storageRESTVolume]
 	filePath := vars[storageRESTFilePath]
 	versionID := vars[storageRESTVersionID]
-	fi, err := s.storage.ReadVersion(r.Context(), volume, filePath, versionID)
+	readData, err := strconv.ParseBool(vars[storageRESTReadData])
 	if err != nil {
 		s.writeErrorResponse(w, err)
 		return
 	}
+
+	fi, err := s.storage.ReadVersion(r.Context(), volume, filePath, versionID, readData)
+	if err != nil {
+		s.writeErrorResponse(w, err)
+		return
+	}
+
 	logger.LogIf(r.Context(), msgp.Encode(w, &fi))
 }
 
@@ -515,45 +528,13 @@ func (s *storageRESTServer) ReadFileStreamHandler(w http.ResponseWriter, r *http
 	defer rc.Close()
 
 	w.Header().Set(xhttp.ContentLength, strconv.Itoa(length))
-
-	if length >= readBlockSize {
-		bufp := s.storage.pool.Get().(*[]byte)
-		defer s.storage.pool.Put(bufp)
-
-		io.CopyBuffer(w, rc, *bufp)
-	} else {
-		io.Copy(w, rc)
+	if _, err = io.Copy(w, rc); err != nil {
+		if !xnet.IsNetworkOrHostDown(err, true) { // do not need to log disconnected clients
+			logger.LogIf(r.Context(), err)
+		}
+		return
 	}
 	w.(http.Flusher).Flush()
-}
-
-// WalkVersionsHandler - remote caller to start walking at a requested directory path.
-func (s *storageRESTServer) WalkVersionsHandler(w http.ResponseWriter, r *http.Request) {
-	if !s.IsValid(w, r) {
-		return
-	}
-	vars := mux.Vars(r)
-	volume := vars[storageRESTVolume]
-	dirPath := vars[storageRESTDirPath]
-	markerPath := vars[storageRESTMarkerPath]
-	recursive, err := strconv.ParseBool(vars[storageRESTRecursive])
-	if err != nil {
-		s.writeErrorResponse(w, err)
-		return
-	}
-
-	setEventStreamHeaders(w)
-
-	fch, err := s.storage.WalkVersions(r.Context(), volume, dirPath, markerPath, recursive, r.Context().Done())
-	if err != nil {
-		s.writeErrorResponse(w, err)
-		return
-	}
-	encoder := msgp.NewWriter(w)
-	for fi := range fch {
-		logger.LogIf(r.Context(), fi.EncodeMsg(encoder))
-	}
-	logger.LogIf(r.Context(), encoder.Flush())
 }
 
 // ListDirHandler - list a directory.
@@ -680,7 +661,7 @@ func (s *storageRESTServer) RenameFileHandler(w http.ResponseWriter, r *http.Req
 }
 
 // keepHTTPResponseAlive can be used to avoid timeouts with long storage
-// operations, such as bitrot verification or data usage crawling.
+// operations, such as bitrot verification or data usage scanning.
 // Every 10 seconds a space character is sent.
 // The returned function should always be called to release resources.
 // An optional error can be sent which will be picked as text only error,
@@ -804,7 +785,7 @@ func (h *httpStreamResponse) CloseWithError(err error) {
 }
 
 // streamHTTPResponse can be used to avoid timeouts with long storage
-// operations, such as bitrot verification or data usage crawling.
+// operations, such as bitrot verification or data usage scanning.
 // Every 10 seconds a space character is sent.
 // The returned function should always be called to release resources.
 // An optional error can be sent which will be picked as text only error,
@@ -1025,7 +1006,7 @@ func registerStorageRESTHandlers(router *mux.Router, endpointServerPools Endpoin
 
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodHealth).HandlerFunc(httpTraceHdrs(server.HealthHandler))
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodDiskInfo).HandlerFunc(httpTraceHdrs(server.DiskInfoHandler))
-			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodCrawlAndGetDataUsage).HandlerFunc(httpTraceHdrs(server.CrawlAndGetDataUsageHandler))
+			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodNSScanner).HandlerFunc(httpTraceHdrs(server.NSScannerHandler))
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodMakeVol).HandlerFunc(httpTraceHdrs(server.MakeVolHandler)).Queries(restQueries(storageRESTVolume)...)
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodMakeVolBulk).HandlerFunc(httpTraceHdrs(server.MakeVolBulkHandler)).Queries(restQueries(storageRESTVolumes)...)
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodStatVol).HandlerFunc(httpTraceHdrs(server.StatVolHandler)).Queries(restQueries(storageRESTVolume)...)
@@ -1039,9 +1020,9 @@ func registerStorageRESTHandlers(router *mux.Router, endpointServerPools Endpoin
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodWriteMetadata).HandlerFunc(httpTraceHdrs(server.WriteMetadataHandler)).
 				Queries(restQueries(storageRESTVolume, storageRESTFilePath)...)
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodDeleteVersion).HandlerFunc(httpTraceHdrs(server.DeleteVersionHandler)).
-				Queries(restQueries(storageRESTVolume, storageRESTFilePath)...)
+				Queries(restQueries(storageRESTVolume, storageRESTFilePath, storageRESTForceDelMarker)...)
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodReadVersion).HandlerFunc(httpTraceHdrs(server.ReadVersionHandler)).
-				Queries(restQueries(storageRESTVolume, storageRESTFilePath, storageRESTVersionID)...)
+				Queries(restQueries(storageRESTVolume, storageRESTFilePath, storageRESTVersionID, storageRESTReadData)...)
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodRenameData).HandlerFunc(httpTraceHdrs(server.RenameDataHandler)).
 				Queries(restQueries(storageRESTSrcVolume, storageRESTSrcPath, storageRESTDataDir,
 					storageRESTDstVolume, storageRESTDstPath)...)
@@ -1061,8 +1042,6 @@ func registerStorageRESTHandlers(router *mux.Router, endpointServerPools Endpoin
 				Queries(restQueries(storageRESTVolume, storageRESTFilePath, storageRESTOffset, storageRESTLength)...)
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodListDir).HandlerFunc(httpTraceHdrs(server.ListDirHandler)).
 				Queries(restQueries(storageRESTVolume, storageRESTDirPath, storageRESTCount)...)
-			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodWalkVersions).HandlerFunc(httpTraceHdrs(server.WalkVersionsHandler)).
-				Queries(restQueries(storageRESTVolume, storageRESTDirPath, storageRESTMarkerPath, storageRESTRecursive)...)
 
 			subrouter.Methods(http.MethodPost).Path(storageRESTVersionPrefix + storageRESTMethodDeleteVersions).HandlerFunc(httpTraceHdrs(server.DeleteVersionsHandler)).
 				Queries(restQueries(storageRESTVolume, storageRESTTotalVersions)...)

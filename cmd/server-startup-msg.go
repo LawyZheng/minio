@@ -27,6 +27,7 @@ import (
 	"github.com/minio/minio/cmd/config"
 	"github.com/minio/minio/cmd/logger"
 	color "github.com/minio/minio/pkg/color"
+	"github.com/minio/minio/pkg/madmin"
 	xnet "github.com/minio/minio/pkg/net"
 )
 
@@ -135,12 +136,12 @@ func printServerCommonMsg(apiEndpoints []string) {
 	apiEndpointStr := strings.Join(apiEndpoints, "  ")
 
 	// Colorize the message and print.
-	logStartupMessage(color.Blue("Endpoint: ") + color.Bold(fmt.Sprintf(getFormatStr(len(apiEndpointStr), 1), apiEndpointStr)))
+	logStartupMessage(color.Blue("Endpoint: ") + color.Bold(fmt.Sprintf("%s ", apiEndpointStr)))
 	if color.IsTerminal() && !globalCLIContext.Anonymous {
 		logStartupMessage(color.Blue("RootUser: ") + color.Bold(fmt.Sprintf("%s ", cred.AccessKey)))
-		logStartupMessage(color.Blue("RootPassword: ") + color.Bold(fmt.Sprintf("%s ", cred.SecretKey)))
+		logStartupMessage(color.Blue("RootPass: ") + color.Bold(fmt.Sprintf("%s ", cred.SecretKey)))
 		if region != "" {
-			logStartupMessage(color.Blue("Region: ") + color.Bold(fmt.Sprintf(getFormatStr(len(region), 3), region)))
+			logStartupMessage(color.Blue("Region: ") + color.Bold(fmt.Sprintf(getFormatStr(len(region), 2), region)))
 		}
 	}
 	printEventNotifiers()
@@ -164,7 +165,7 @@ func printEventNotifiers() {
 
 	arnMsg := color.Blue("SQS ARNs: ")
 	for _, arn := range arns {
-		arnMsg += color.Bold(fmt.Sprintf(getFormatStr(len(arn), 1), arn))
+		arnMsg += color.Bold(fmt.Sprintf("%s ", arn))
 	}
 
 	logStartupMessage(arnMsg)
@@ -206,7 +207,7 @@ func getStorageInfoMsg(storageInfo StorageInfo) string {
 	var msg string
 	var mcMessage string
 	onlineDisks, offlineDisks := getOnlineOfflineDisksStats(storageInfo.Disks)
-	if storageInfo.Backend.Type == BackendErasure {
+	if storageInfo.Backend.Type == madmin.Erasure {
 		if offlineDisks.Sum() > 0 {
 			mcMessage = "Use `mc admin info` to look for latest server/disk info\n"
 		}

@@ -66,7 +66,7 @@ func (d *naughtyDisk) Hostname() string {
 	return d.disk.Hostname()
 }
 
-func (d *naughtyDisk) Healing() bool {
+func (d *naughtyDisk) Healing() *healingTracker {
 	return d.disk.Healing()
 }
 
@@ -90,6 +90,12 @@ func (d *naughtyDisk) calcError() (err error) {
 	return nil
 }
 
+func (d *naughtyDisk) GetDiskLoc() (poolIdx, setIdx, diskIdx int) {
+	return -1, -1, -1
+}
+
+func (d *naughtyDisk) SetDiskLoc(poolIdx, setIdx, diskIdx int) {}
+
 func (d *naughtyDisk) GetDiskID() (string, error) {
 	return d.disk.GetDiskID()
 }
@@ -98,8 +104,8 @@ func (d *naughtyDisk) SetDiskID(id string) {
 	d.disk.SetDiskID(id)
 }
 
-func (d *naughtyDisk) CrawlAndGetDataUsage(ctx context.Context, cache dataUsageCache) (info dataUsageCache, err error) {
-	return d.disk.CrawlAndGetDataUsage(ctx, cache)
+func (d *naughtyDisk) NSScanner(ctx context.Context, cache dataUsageCache) (info dataUsageCache, err error) {
+	return d.disk.NSScanner(ctx, cache)
 }
 
 func (d *naughtyDisk) DiskInfo(ctx context.Context) (info DiskInfo, err error) {
@@ -148,13 +154,6 @@ func (d *naughtyDisk) WalkDir(ctx context.Context, opts WalkDirOptions, wr io.Wr
 		return err
 	}
 	return d.disk.WalkDir(ctx, opts, wr)
-}
-
-func (d *naughtyDisk) WalkVersions(ctx context.Context, volume, dirPath, marker string, recursive bool, endWalkCh <-chan struct{}) (chan FileInfoVersions, error) {
-	if err := d.calcError(); err != nil {
-		return nil, err
-	}
-	return d.disk.WalkVersions(ctx, volume, dirPath, marker, recursive, endWalkCh)
 }
 
 func (d *naughtyDisk) ListDir(ctx context.Context, volume, dirPath string, count int) (entries []string, err error) {
@@ -245,18 +244,18 @@ func (d *naughtyDisk) WriteMetadata(ctx context.Context, volume, path string, fi
 	return d.disk.WriteMetadata(ctx, volume, path, fi)
 }
 
-func (d *naughtyDisk) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo) (err error) {
+func (d *naughtyDisk) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) (err error) {
 	if err := d.calcError(); err != nil {
 		return err
 	}
-	return d.disk.DeleteVersion(ctx, volume, path, fi)
+	return d.disk.DeleteVersion(ctx, volume, path, fi, forceDelMarker)
 }
 
-func (d *naughtyDisk) ReadVersion(ctx context.Context, volume, path, versionID string) (fi FileInfo, err error) {
+func (d *naughtyDisk) ReadVersion(ctx context.Context, volume, path, versionID string, readData bool) (fi FileInfo, err error) {
 	if err := d.calcError(); err != nil {
 		return FileInfo{}, err
 	}
-	return d.disk.ReadVersion(ctx, volume, path, versionID)
+	return d.disk.ReadVersion(ctx, volume, path, versionID, readData)
 }
 
 func (d *naughtyDisk) WriteAll(ctx context.Context, volume string, path string, b []byte) (err error) {

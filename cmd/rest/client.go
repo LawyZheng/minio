@@ -42,6 +42,19 @@ const (
 	closed
 )
 
+// Hold the number of failed RPC calls due to networking errors
+var networkErrsCounter uint64
+
+// GetNetworkErrsCounter returns the number of failed RPC requests
+func GetNetworkErrsCounter() uint64 {
+	return atomic.LoadUint64(&networkErrsCounter)
+}
+
+// ResetNetworkErrsCounter resets the number of failed RPC requests
+func ResetNetworkErrsCounter() {
+	atomic.StoreUint64(&networkErrsCounter, 0)
+}
+
 // NetworkError - error type in case of errors related to http/transport
 // for ex. connection refused, connection reset, dns resolution failure etc.
 // All errors returned by storage-rest-server (ex errFileNotFound, errDiskNotFound) are not considered to be network errors.
@@ -60,6 +73,8 @@ func (n *NetworkError) Unwrap() error {
 
 // Client - http based RPC client.
 type Client struct {
+	connected int32 // ref: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+
 	// HealthCheckFn is the function set to test for health.
 	// If not set the client will not keep track of health.
 	// Calling this returns true or false if the target
@@ -84,7 +99,6 @@ type Client struct {
 	httpClient   *http.Client
 	url          *url.URL
 	newAuthToken func(audience string) string
-	connected    int32
 }
 
 // URL query separator constants
@@ -119,6 +133,7 @@ func (c *Client) Call(ctx context.Context, method string, values url.Values, bod
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		if c.HealthCheckFn != nil && xnet.IsNetworkOrHostDown(err, c.ExpectTimeouts) {
+			atomic.AddUint64(&networkErrsCounter, 1)
 			if c.MarkOffline() {
 				logger.LogIf(ctx, fmt.Errorf("Marking %s temporary offline; caused by %w", c.url.String(), err))
 			}

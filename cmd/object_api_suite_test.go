@@ -210,7 +210,7 @@ func testMultipleObjectCreation(obj ObjectLayer, instanceType string, t TestErrH
 
 	for key, value := range objects {
 		var byteBuffer bytes.Buffer
-		err = obj.GetObject(context.Background(), "bucket", key, 0, int64(len(value)), &byteBuffer, "", opts)
+		err = GetObject(context.Background(), obj, "bucket", key, 0, int64(len(value)), &byteBuffer, "", opts)
 		if err != nil {
 			t.Fatalf("%s: <ERROR> %s", instanceType, err)
 		}
@@ -461,7 +461,7 @@ func testObjectOverwriteWorks(obj ObjectLayer, instanceType string, t TestErrHan
 	}
 
 	var bytesBuffer bytes.Buffer
-	err = obj.GetObject(context.Background(), "bucket", "object", 0, length, &bytesBuffer, "", opts)
+	err = GetObject(context.Background(), obj, "bucket", "object", 0, length, &bytesBuffer, "", opts)
 	if err != nil {
 		t.Fatalf("%s: <ERROR> %s", instanceType, err)
 	}
@@ -508,27 +508,31 @@ func testBucketRecreateFails(obj ObjectLayer, instanceType string, t TestErrHand
 	}
 }
 
-func execExtended(t *testing.T, fn func(t *testing.T)) {
-	// Exec with default settings...
-	globalCompressConfigMu.Lock()
-	globalCompressConfig.Enabled = false
-	globalCompressConfigMu.Unlock()
-	t.Run("default", func(t *testing.T) {
-		fn(t)
-	})
-	if testing.Short() {
-		return
-	}
-
+func enableCompression(t *testing.T, encrypt bool) {
 	// Enable compression and exec...
 	globalCompressConfigMu.Lock()
 	globalCompressConfig.Enabled = true
 	globalCompressConfig.MimeTypes = nil
 	globalCompressConfig.Extensions = nil
+	globalCompressConfig.AllowEncrypted = encrypt
 	globalCompressConfigMu.Unlock()
-	t.Run("compressed", func(t *testing.T) {
-		fn(t)
-	})
+	if encrypt {
+		globalAutoEncryption = encrypt
+		os.Setenv("MINIO_KMS_MASTER_KEY", "my-minio-key:6368616e676520746869732070617373776f726420746f206120736563726574")
+		defer os.Setenv("MINIO_KMS_MASTER_KEY", "")
+		var err error
+		GlobalKMS, err = crypto.NewKMS(crypto.KMSConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func enableEncrytion(t *testing.T) {
+	// Exec with default settings...
+	globalCompressConfigMu.Lock()
+	globalCompressConfig.Enabled = false
+	globalCompressConfigMu.Unlock()
 
 	globalAutoEncryption = true
 	os.Setenv("MINIO_KMS_MASTER_KEY", "my-minio-key:6368616e676520746869732070617373776f726420746f206120736563726574")
@@ -538,25 +542,46 @@ func execExtended(t *testing.T, fn func(t *testing.T)) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
 
-	t.Run("encrypted", func(t *testing.T) {
-		fn(t)
-	})
-
-	// Enable compression of encrypted and exec...
-	globalCompressConfigMu.Lock()
-	globalCompressConfig.AllowEncrypted = true
-	globalCompressConfigMu.Unlock()
-	t.Run("compressed+encrypted", func(t *testing.T) {
-		fn(t)
-	})
-
+func resetCompressEncryption() {
 	// Reset...
 	globalCompressConfigMu.Lock()
 	globalCompressConfig.Enabled = false
 	globalCompressConfig.AllowEncrypted = false
 	globalCompressConfigMu.Unlock()
 	globalAutoEncryption = false
+	GlobalKMS = nil
+}
+
+func execExtended(t *testing.T, fn func(t *testing.T)) {
+	// Exec with default settings...
+	resetCompressEncryption()
+	t.Run("default", func(t *testing.T) {
+		fn(t)
+	})
+
+	if testing.Short() {
+		return
+	}
+
+	t.Run("compressed", func(t *testing.T) {
+		resetCompressEncryption()
+		enableCompression(t, false)
+		fn(t)
+	})
+
+	t.Run("encrypted", func(t *testing.T) {
+		resetCompressEncryption()
+		enableEncrytion(t)
+		fn(t)
+	})
+
+	t.Run("compressed+encrypted", func(t *testing.T) {
+		resetCompressEncryption()
+		enableCompression(t, true)
+		fn(t)
+	})
 }
 
 // ExecExtendedObjectLayerTest will execute the tests with combinations of encrypted & compressed.
@@ -589,7 +614,7 @@ func testPutObject(obj ObjectLayer, instanceType string, t TestErrHandler) {
 	if err != nil {
 		t.Fatalf("%s: <ERROR> %s", instanceType, err)
 	}
-	err = obj.GetObject(context.Background(), "bucket", "object", 0, length, &bytesBuffer1, "", opts)
+	err = GetObject(context.Background(), obj, "bucket", "object", 0, length, &bytesBuffer1, "", opts)
 	if err != nil {
 		t.Fatalf("%s: <ERROR> %s", instanceType, err)
 	}
@@ -602,7 +627,7 @@ func testPutObject(obj ObjectLayer, instanceType string, t TestErrHandler) {
 	if err != nil {
 		t.Fatalf("%s: <ERROR> %s", instanceType, err)
 	}
-	err = obj.GetObject(context.Background(), "bucket", "object", 0, length, &bytesBuffer2, "", opts)
+	err = GetObject(context.Background(), obj, "bucket", "object", 0, length, &bytesBuffer2, "", opts)
 	if err != nil {
 		t.Fatalf("%s: <ERROR> %s", instanceType, err)
 	}
@@ -633,7 +658,7 @@ func testPutObjectInSubdir(obj ObjectLayer, instanceType string, t TestErrHandle
 	}
 
 	var bytesBuffer bytes.Buffer
-	err = obj.GetObject(context.Background(), "bucket", "dir1/dir2/object", 0, length, &bytesBuffer, "", opts)
+	err = GetObject(context.Background(), obj, "bucket", "dir1/dir2/object", 0, length, &bytesBuffer, "", opts)
 	if err != nil {
 		t.Fatalf("%s: <ERROR> %s", instanceType, err)
 	}
