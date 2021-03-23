@@ -85,11 +85,15 @@ func readDir(dirPath string) (entries []string, err error) {
 	return readDirN(dirPath, -1)
 }
 
-// readDir applies the filter function on each entries at dirPath, doesn't recurse into
-// the directory itself.
-func readDirFilterFn(dirPath string, filter func(name string, typ os.FileMode) error) error {
+// readDirFn applies the fn() function on each entries at dirPath, doesn't recurse into
+// the directory itself, if the dirPath doesn't exist this function doesn't return
+// an error.
+func readDirFn(dirPath string, filter func(name string, typ os.FileMode) error) error {
 	f, err := os.Open(dirPath)
 	if err != nil {
+		if osErrToFileErr(err) == errFileNotFound {
+			return nil
+		}
 		return osErrToFileErr(err)
 	}
 	defer f.Close()
@@ -104,7 +108,11 @@ func readDirFilterFn(dirPath string, filter func(name string, typ os.FileMode) e
 			nbuf, err = syscall.ReadDirent(int(f.Fd()), buf)
 			if err != nil {
 				if isSysErrNotDir(err) {
-					return errFileNotFound
+					return nil
+				}
+				err = osErrToFileErr(err)
+				if err == errFileNotFound {
+					return nil
 				}
 				return err
 			}
@@ -159,7 +167,7 @@ func readDirN(dirPath string, count int) (entries []string, err error) {
 				if isSysErrNotDir(err) {
 					return nil, errFileNotFound
 				}
-				return nil, err
+				return nil, osErrToFileErr(err)
 			}
 			if nbuf <= 0 {
 				break
@@ -173,11 +181,12 @@ func readDirN(dirPath string, count int) (entries []string, err error) {
 		if len(name) == 0 || bytes.Equal(name, []byte{'.'}) || bytes.Equal(name, []byte{'.', '.'}) {
 			continue
 		}
+
 		// Fallback for filesystems (like old XFS) that don't
 		// support Dirent.Type and have DT_UNKNOWN (0) there
 		// instead.
-		if typ == unexpectedFileMode {
-			fi, err := os.Lstat(pathJoin(dirPath, string(name)))
+		if typ == unexpectedFileMode || typ&os.ModeSymlink == os.ModeSymlink {
+			fi, err := os.Stat(pathJoin(dirPath, string(name)))
 			if err != nil {
 				// It got deleted in the meantime, not found
 				// or returns too many symlinks ignore this
@@ -188,6 +197,12 @@ func readDirN(dirPath string, count int) (entries []string, err error) {
 				}
 				return nil, err
 			}
+
+			// Ignore symlinked directories.
+			if typ&os.ModeSymlink == os.ModeSymlink && fi.IsDir() {
+				continue
+			}
+
 			typ = fi.Mode() & os.ModeType
 		}
 		if typ&os.ModeSymlink == os.ModeSymlink {
@@ -204,17 +219,22 @@ func readDirN(dirPath string, count int) (entries []string, err error) {
 			}
 			continue
 		}
+
+		var nameStr string
 		if typ.IsRegular() {
-			entries = append(entries, string(name))
+			nameStr = string(name)
 		} else if typ.IsDir() {
 			// Use temp buffer to append a slash to avoid string concat.
 			tmp = tmp[:len(name)+1]
 			copy(tmp, name)
 			tmp[len(tmp)-1] = '/' // SlashSeparator
-			entries = append(entries, string(tmp))
+			nameStr = string(tmp)
 		}
+
 		count--
+		entries = append(entries, nameStr)
 	}
+
 	return
 }
 

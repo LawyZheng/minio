@@ -23,8 +23,10 @@ import (
 	"io/ioutil"
 	"net/http"
 	"path"
+	"sort"
 
 	"github.com/gorilla/mux"
+	"github.com/minio/minio/cmd/config/dns"
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/auth"
 	iampolicy "github.com/minio/minio/pkg/iam/policy"
@@ -56,7 +58,7 @@ func validateAdminUsersReq(ctx context.Context, w http.ResponseWriter, r *http.R
 func (a adminAPIHandlers) RemoveUser(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "RemoveUser")
 
-	defer logger.AuditLog(w, r, "RemoveUser", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.DeleteUserAdminAction)
 	if objectAPI == nil {
@@ -66,7 +68,7 @@ func (a adminAPIHandlers) RemoveUser(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	accessKey := vars["accessKey"]
 
-	ok, err := globalIAMSys.IsTempUser(accessKey)
+	ok, _, err := globalIAMSys.IsTempUser(accessKey)
 	if err != nil {
 		writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
 		return
@@ -94,7 +96,7 @@ func (a adminAPIHandlers) RemoveUser(w http.ResponseWriter, r *http.Request) {
 func (a adminAPIHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "ListUsers")
 
-	defer logger.AuditLog(w, r, "ListUsers", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, cred := validateAdminUsersReq(ctx, w, r, iampolicy.ListUsersAdminAction)
 	if objectAPI == nil {
@@ -128,7 +130,7 @@ func (a adminAPIHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 func (a adminAPIHandlers) GetUserInfo(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "GetUserInfo")
 
-	defer logger.AuditLog(w, r, "GetUserInfo", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	vars := mux.Vars(r)
 	name := vars["accessKey"]
@@ -184,7 +186,7 @@ func (a adminAPIHandlers) GetUserInfo(w http.ResponseWriter, r *http.Request) {
 func (a adminAPIHandlers) UpdateGroupMembers(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "UpdateGroupMembers")
 
-	defer logger.AuditLog(w, r, "UpdateGroupMembers", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.AddUserToGroupAdminAction)
 	if objectAPI == nil {
@@ -229,7 +231,7 @@ func (a adminAPIHandlers) UpdateGroupMembers(w http.ResponseWriter, r *http.Requ
 func (a adminAPIHandlers) GetGroup(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "GetGroup")
 
-	defer logger.AuditLog(w, r, "GetGroup", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.GetGroupAdminAction)
 	if objectAPI == nil {
@@ -258,7 +260,7 @@ func (a adminAPIHandlers) GetGroup(w http.ResponseWriter, r *http.Request) {
 func (a adminAPIHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "ListGroups")
 
-	defer logger.AuditLog(w, r, "ListGroups", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.ListGroupsAdminAction)
 	if objectAPI == nil {
@@ -284,7 +286,7 @@ func (a adminAPIHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
 func (a adminAPIHandlers) SetGroupStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "SetGroupStatus")
 
-	defer logger.AuditLog(w, r, "SetGroupStatus", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.EnableGroupAdminAction)
 	if objectAPI == nil {
@@ -321,7 +323,7 @@ func (a adminAPIHandlers) SetGroupStatus(w http.ResponseWriter, r *http.Request)
 func (a adminAPIHandlers) SetUserStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "SetUserStatus")
 
-	defer logger.AuditLog(w, r, "SetUserStatus", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.EnableUserAdminAction)
 	if objectAPI == nil {
@@ -356,7 +358,7 @@ func (a adminAPIHandlers) SetUserStatus(w http.ResponseWriter, r *http.Request) 
 func (a adminAPIHandlers) AddUser(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "AddUser")
 
-	defer logger.AuditLog(w, r, "AddUser", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	vars := mux.Vars(r)
 	accessKey := path.Clean(vars["accessKey"])
@@ -405,6 +407,18 @@ func (a adminAPIHandlers) AddUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if implicitPerm && !globalIAMSys.IsAllowed(iampolicy.Args{
+		AccountName:     accessKey,
+		Action:          iampolicy.CreateUserAdminAction,
+		ConditionValues: getConditionValues(r, "", accessKey, claims),
+		IsOwner:         owner,
+		Claims:          claims,
+		DenyOnly:        true, // check if changing password is explicitly denied.
+	}) {
+		writeErrorResponseJSON(ctx, w, errorCodes.ToAPIErr(ErrAccessDenied), r.URL)
+		return
+	}
+
 	if r.ContentLength > maxEConfigJSONSize || r.ContentLength == -1 {
 		// More than maxConfigSize bytes were available
 		writeErrorResponseJSON(ctx, w, errorCodes.ToAPIErr(ErrAdminConfigTooLarge), r.URL)
@@ -426,7 +440,7 @@ func (a adminAPIHandlers) AddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = globalIAMSys.SetUser(accessKey, uinfo); err != nil {
+	if err = globalIAMSys.CreateUser(accessKey, uinfo); err != nil {
 		writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
 		return
 	}
@@ -444,7 +458,7 @@ func (a adminAPIHandlers) AddUser(w http.ResponseWriter, r *http.Request) {
 func (a adminAPIHandlers) AddServiceAccount(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "AddServiceAccount")
 
-	defer logger.AuditLog(w, r, "AddServiceAccount", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	// Get current object layer instance.
 	objectAPI := newObjectLayerFn()
@@ -483,7 +497,7 @@ func (a adminAPIHandlers) AddServiceAccount(w http.ResponseWriter, r *http.Reque
 		parentUser = cred.ParentUser
 	}
 
-	newCred, err := globalIAMSys.NewServiceAccount(ctx, parentUser, createReq.Policy)
+	newCred, err := globalIAMSys.NewServiceAccount(ctx, parentUser, cred.Groups, createReq.Policy)
 	if err != nil {
 		writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
 		return
@@ -523,7 +537,7 @@ func (a adminAPIHandlers) AddServiceAccount(w http.ResponseWriter, r *http.Reque
 func (a adminAPIHandlers) ListServiceAccounts(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "ListServiceAccounts")
 
-	defer logger.AuditLog(w, r, "ListServiceAccounts", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	// Get current object layer instance.
 	objectAPI := newObjectLayerFn()
@@ -578,7 +592,7 @@ func (a adminAPIHandlers) ListServiceAccounts(w http.ResponseWriter, r *http.Req
 func (a adminAPIHandlers) DeleteServiceAccount(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "DeleteServiceAccount")
 
-	defer logger.AuditLog(w, r, "DeleteServiceAccount", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	// Get current object layer instance.
 	objectAPI := newObjectLayerFn()
@@ -637,7 +651,7 @@ func (a adminAPIHandlers) DeleteServiceAccount(w http.ResponseWriter, r *http.Re
 func (a adminAPIHandlers) AccountInfoHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "AccountInfo")
 
-	defer logger.AuditLog(w, r, "AccountInfo", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	// Get current object layer instance.
 	objectAPI := newObjectLayerFn()
@@ -688,12 +702,6 @@ func (a adminAPIHandlers) AccountInfoHandler(w http.ResponseWriter, r *http.Requ
 		return rd, wr
 	}
 
-	buckets, err := objectAPI.ListBuckets(ctx)
-	if err != nil {
-		writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
-		return
-	}
-
 	// Load the latest calculated data usage
 	dataUsageInfo, err := loadDataUsageFromBackend(ctx, objectAPI)
 	if err != nil {
@@ -701,11 +709,34 @@ func (a adminAPIHandlers) AccountInfoHandler(w http.ResponseWriter, r *http.Requ
 		logger.LogIf(ctx, err)
 	}
 
-	accountName := cred.AccessKey
-	if cred.ParentUser != "" {
-		accountName = cred.ParentUser
+	// If etcd, dns federation configured list buckets from etcd.
+	var buckets []BucketInfo
+	if globalDNSConfig != nil && globalBucketFederation {
+		dnsBuckets, err := globalDNSConfig.List()
+		if err != nil && !IsErrIgnored(err,
+			dns.ErrNoEntriesFound,
+			dns.ErrDomainMissing) {
+			writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL, guessIsBrowserReq(r))
+			return
+		}
+		for _, dnsRecords := range dnsBuckets {
+			buckets = append(buckets, BucketInfo{
+				Name:    dnsRecords[0].Key,
+				Created: dnsRecords[0].CreationDate,
+			})
+		}
+		sort.Slice(buckets, func(i, j int) bool {
+			return buckets[i].Name < buckets[j].Name
+		})
+	} else {
+		buckets, err = objectAPI.ListBuckets(ctx)
+		if err != nil {
+			writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
+			return
+		}
 	}
 
+	accountName := cred.AccessKey
 	policies, err := globalIAMSys.PolicyDBGet(accountName, false)
 	if err != nil {
 		logger.LogIf(ctx, err)
@@ -751,7 +782,7 @@ func (a adminAPIHandlers) AccountInfoHandler(w http.ResponseWriter, r *http.Requ
 func (a adminAPIHandlers) InfoCannedPolicyV2(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "InfoCannedPolicyV2")
 
-	defer logger.AuditLog(w, r, "InfoCannedPolicyV2", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.GetPolicyAdminAction)
 	if objectAPI == nil {
@@ -778,7 +809,7 @@ func (a adminAPIHandlers) InfoCannedPolicyV2(w http.ResponseWriter, r *http.Requ
 func (a adminAPIHandlers) InfoCannedPolicy(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "InfoCannedPolicy")
 
-	defer logger.AuditLog(w, r, "InfoCannedPolicy", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.GetPolicyAdminAction)
 	if objectAPI == nil {
@@ -802,7 +833,7 @@ func (a adminAPIHandlers) InfoCannedPolicy(w http.ResponseWriter, r *http.Reques
 func (a adminAPIHandlers) ListCannedPoliciesV2(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "ListCannedPoliciesV2")
 
-	defer logger.AuditLog(w, r, "ListCannedPoliciesV2", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.ListUserPoliciesAdminAction)
 	if objectAPI == nil {
@@ -836,7 +867,7 @@ func (a adminAPIHandlers) ListCannedPoliciesV2(w http.ResponseWriter, r *http.Re
 func (a adminAPIHandlers) ListCannedPolicies(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "ListCannedPolicies")
 
-	defer logger.AuditLog(w, r, "ListCannedPolicies", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.ListUserPoliciesAdminAction)
 	if objectAPI == nil {
@@ -870,7 +901,7 @@ func (a adminAPIHandlers) ListCannedPolicies(w http.ResponseWriter, r *http.Requ
 func (a adminAPIHandlers) RemoveCannedPolicy(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "RemoveCannedPolicy")
 
-	defer logger.AuditLog(w, r, "RemoveCannedPolicy", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.DeletePolicyAdminAction)
 	if objectAPI == nil {
@@ -898,7 +929,7 @@ func (a adminAPIHandlers) RemoveCannedPolicy(w http.ResponseWriter, r *http.Requ
 func (a adminAPIHandlers) AddCannedPolicy(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "AddCannedPolicy")
 
-	defer logger.AuditLog(w, r, "AddCannedPolicy", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.CreatePolicyAdminAction)
 	if objectAPI == nil {
@@ -950,7 +981,7 @@ func (a adminAPIHandlers) AddCannedPolicy(w http.ResponseWriter, r *http.Request
 func (a adminAPIHandlers) SetPolicyForUserOrGroup(w http.ResponseWriter, r *http.Request) {
 	ctx := newContext(r, w, "SetPolicyForUserOrGroup")
 
-	defer logger.AuditLog(w, r, "SetPolicyForUserOrGroup", mustGetClaimsFromToken(r))
+	defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
 
 	objectAPI, _ := validateAdminUsersReq(ctx, w, r, iampolicy.AttachPolicyAdminAction)
 	if objectAPI == nil {
@@ -963,7 +994,7 @@ func (a adminAPIHandlers) SetPolicyForUserOrGroup(w http.ResponseWriter, r *http
 	isGroup := vars["isGroup"] == "true"
 
 	if !isGroup {
-		ok, err := globalIAMSys.IsTempUser(entityName)
+		ok, _, err := globalIAMSys.IsTempUser(entityName)
 		if err != nil && err != errNoSuchUser {
 			writeErrorResponseJSON(ctx, w, toAdminAPIErr(ctx, err), r.URL)
 			return

@@ -36,10 +36,10 @@ type StorageAPI interface {
 	Close() error
 	GetDiskID() (string, error)
 	SetDiskID(id string)
-	Healing() bool // Returns if disk is healing.
+	Healing() *healingTracker // Returns nil if disk is not healing.
 
 	DiskInfo(ctx context.Context) (info DiskInfo, err error)
-	CrawlAndGetDataUsage(ctx context.Context, cache dataUsageCache) (dataUsageCache, error)
+	NSScanner(ctx context.Context, cache dataUsageCache) (dataUsageCache, error)
 
 	// Volume operations.
 	MakeVol(ctx context.Context, volume string) (err error)
@@ -51,14 +51,11 @@ type StorageAPI interface {
 	// WalkDir will walk a directory on disk and return a metacache stream on wr.
 	WalkDir(ctx context.Context, opts WalkDirOptions, wr io.Writer) error
 
-	// WalkVersions in sorted order directly on disk.
-	WalkVersions(ctx context.Context, volume, dirPath, marker string, recursive bool, endWalkCh <-chan struct{}) (chan FileInfoVersions, error)
-
 	// Metadata operations
-	DeleteVersion(ctx context.Context, volume, path string, fi FileInfo) error
+	DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool) error
 	DeleteVersions(ctx context.Context, volume string, versions []FileInfo) []error
 	WriteMetadata(ctx context.Context, volume, path string, fi FileInfo) error
-	ReadVersion(ctx context.Context, volume, path, versionID string) (FileInfo, error)
+	ReadVersion(ctx context.Context, volume, path, versionID string, readData bool) (FileInfo, error)
 	RenameData(ctx context.Context, srcVolume, srcPath, dataDir, dstVolume, dstPath string) error
 
 	// File operations.
@@ -79,6 +76,9 @@ type StorageAPI interface {
 
 	// Read all.
 	ReadAll(ctx context.Context, volume string, path string) (buf []byte, err error)
+
+	GetDiskLoc() (poolIdx, setIdx, diskIdx int) // Retrieve location indexes.
+	SetDiskLoc(poolIdx, setIdx, diskIdx int)    // Set location indexes.
 }
 
 // storageReader is an io.Reader view of a disk

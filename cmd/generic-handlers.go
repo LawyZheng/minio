@@ -30,7 +30,6 @@ import (
 	xhttp "github.com/minio/minio/cmd/http"
 	"github.com/minio/minio/cmd/http/stats"
 	"github.com/minio/minio/cmd/logger"
-	"github.com/minio/minio/pkg/handlers"
 )
 
 // Adds limiting body size middleware
@@ -217,7 +216,8 @@ func guessIsHealthCheckReq(req *http.Request) bool {
 	return aType == authTypeAnonymous && (req.Method == http.MethodGet || req.Method == http.MethodHead) &&
 		(req.URL.Path == healthCheckPathPrefix+healthCheckLivenessPath ||
 			req.URL.Path == healthCheckPathPrefix+healthCheckReadinessPath ||
-			req.URL.Path == healthCheckPathPrefix+healthCheckClusterPath)
+			req.URL.Path == healthCheckPathPrefix+healthCheckClusterPath ||
+			req.URL.Path == healthCheckPathPrefix+healthCheckClusterReadPath)
 }
 
 // guessIsMetricsReq - returns true if incoming request looks
@@ -228,7 +228,9 @@ func guessIsMetricsReq(req *http.Request) bool {
 	}
 	aType := getRequestAuthType(req)
 	return (aType == authTypeAnonymous || aType == authTypeJWT) &&
-		req.URL.Path == minioReservedBucketPath+prometheusMetricsPath
+		req.URL.Path == minioReservedBucketPath+prometheusMetricsPathLegacy ||
+		req.URL.Path == minioReservedBucketPath+prometheusMetricsV2ClusterPath ||
+		req.URL.Path == minioReservedBucketPath+prometheusMetricsV2NodePath
 }
 
 // guessIsRPCReq - returns true if the request is for an RPC endpoint.
@@ -367,13 +369,17 @@ var supportedDummyBucketAPIs = map[string][]string{
 
 // List of not implemented bucket queries
 var notImplementedBucketResourceNames = map[string]struct{}{
-	"cors":           {},
-	"metrics":        {},
-	"website":        {},
-	"logging":        {},
-	"inventory":      {},
-	"accelerate":     {},
-	"requestPayment": {},
+	"cors":                {},
+	"metrics":             {},
+	"website":             {},
+	"logging":             {},
+	"inventory":           {},
+	"accelerate":          {},
+	"requestPayment":      {},
+	"analytics":           {},
+	"intelligent-tiering": {},
+	"ownershipControls":   {},
+	"publicAccessBlock":   {},
 }
 
 // Checks requests for not implemented Bucket resources
@@ -530,14 +536,6 @@ func setRequestValidityHandler(h http.Handler) http.Handler {
 	})
 }
 
-var fwd = handlers.NewForwarder(&handlers.Forwarder{
-	PassHost:     true,
-	RoundTripper: newGatewayHTTPTransport(1 * time.Hour),
-	Logger: func(err error) {
-		logger.LogIf(GlobalContext, err)
-	},
-})
-
 // setBucketForwardingHandler middleware forwards the path style requests
 // on a bucket to the right bucket location, bucket to IP configuration
 // is obtained from centralized etcd configuration service.
@@ -587,7 +585,12 @@ func setBucketForwardingHandler(h http.Handler) http.Handler {
 					r.URL.Scheme = "https"
 				}
 				r.URL.Host = getHostFromSrv(sr)
-				fwd.ServeHTTP(w, r)
+				// Make sure we remove any existing headers before
+				// proxying the request to another node.
+				for k := range w.Header() {
+					w.Header().Del(k)
+				}
+				globalForwarder.ServeHTTP(w, r)
 				return
 			}
 			h.ServeHTTP(w, r)
@@ -637,7 +640,12 @@ func setBucketForwardingHandler(h http.Handler) http.Handler {
 				r.URL.Scheme = "https"
 			}
 			r.URL.Host = getHostFromSrv(sr)
-			fwd.ServeHTTP(w, r)
+			// Make sure we remove any existing headers before
+			// proxying the request to another node.
+			for k := range w.Header() {
+				w.Header().Del(k)
+			}
+			globalForwarder.ServeHTTP(w, r)
 			return
 		}
 		h.ServeHTTP(w, r)

@@ -116,9 +116,9 @@ func NewKes(cfg KesConfig) (KMS, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Transport.TLSClientConfig != nil {
-		if err = loadCACertificates(cfg.CAPath,
-			cfg.Transport.TLSClientConfig.RootCAs); err != nil {
+
+	if cfg.Transport.TLSClientConfig != nil && cfg.Transport.TLSClientConfig.RootCAs != nil {
+		if err = loadCACertificates(cfg.CAPath, cfg.Transport.TLSClientConfig.RootCAs); err != nil {
 			return nil, err
 		}
 	} else {
@@ -132,8 +132,12 @@ func NewKes(cfg KesConfig) (KMS, error) {
 		if err = loadCACertificates(cfg.CAPath, rootCAs); err != nil {
 			return nil, err
 		}
-		cfg.Transport.TLSClientConfig = &tls.Config{
-			RootCAs: rootCAs,
+		if cfg.Transport.TLSClientConfig == nil {
+			cfg.Transport.TLSClientConfig = &tls.Config{
+				RootCAs: rootCAs,
+			}
+		} else {
+			cfg.Transport.TLSClientConfig.RootCAs = rootCAs
 		}
 	}
 	cfg.Transport.TLSClientConfig.Certificates = []tls.Certificate{cert}
@@ -177,7 +181,10 @@ func (kes *kesService) CreateKey(keyID string) error { return kes.client.CreateK
 // named key referenced by keyID. It also binds the generated key
 // cryptographically to the provided context.
 func (kes *kesService) GenerateKey(keyID string, ctx Context) (key [32]byte, sealedKey []byte, err error) {
-	context := ctx.AppendTo(make([]byte, 0, 128))
+	context, err := ctx.MarshalText()
+	if err != nil {
+		return key, nil, err
+	}
 
 	var plainKey []byte
 	plainKey, sealedKey, err = kes.client.GenerateDataKey(keyID, context)
@@ -199,7 +206,10 @@ func (kes *kesService) GenerateKey(keyID string, ctx Context) (key [32]byte, sea
 // The context must be same context as the one provided while
 // generating the plaintext key / sealedKey.
 func (kes *kesService) UnsealKey(keyID string, sealedKey []byte, ctx Context) (key [32]byte, err error) {
-	context := ctx.AppendTo(make([]byte, 0, 128))
+	context, err := ctx.MarshalText()
+	if err != nil {
+		return key, err
+	}
 
 	var plainKey []byte
 	plainKey, err = kes.client.DecryptDataKey(keyID, sealedKey, context)

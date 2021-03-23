@@ -17,20 +17,20 @@
 package cmd
 
 const (
-	storageRESTVersion       = "v23" // Add small file optimization
+	storageRESTVersion       = "v29" // Removed WalkVersions()
 	storageRESTVersionPrefix = SlashSeparator + storageRESTVersion
 	storageRESTPrefix        = minioReservedBucketPath + "/storage"
 )
 
 const (
-	storageRESTMethodHealth               = "/health"
-	storageRESTMethodDiskInfo             = "/diskinfo"
-	storageRESTMethodCrawlAndGetDataUsage = "/crawlandgetdatausage"
-	storageRESTMethodMakeVol              = "/makevol"
-	storageRESTMethodMakeVolBulk          = "/makevolbulk"
-	storageRESTMethodStatVol              = "/statvol"
-	storageRESTMethodDeleteVol            = "/deletevol"
-	storageRESTMethodListVols             = "/listvols"
+	storageRESTMethodHealth      = "/health"
+	storageRESTMethodDiskInfo    = "/diskinfo"
+	storageRESTMethodNSScanner   = "/nsscanner"
+	storageRESTMethodMakeVol     = "/makevol"
+	storageRESTMethodMakeVolBulk = "/makevolbulk"
+	storageRESTMethodStatVol     = "/statvol"
+	storageRESTMethodDeleteVol   = "/deletevol"
+	storageRESTMethodListVols    = "/listvols"
 
 	storageRESTMethodAppendFile     = "/appendfile"
 	storageRESTMethodCreateFile     = "/createfile"
@@ -45,7 +45,6 @@ const (
 	storageRESTMethodReadFile       = "/readfile"
 	storageRESTMethodReadFileStream = "/readfilestream"
 	storageRESTMethodListDir        = "/listdir"
-	storageRESTMethodWalkVersions   = "/walkversions"
 	storageRESTMethodDeleteFile     = "/deletefile"
 	storageRESTMethodDeleteVersions = "/deleteverions"
 	storageRESTMethodRenameFile     = "/renamefile"
@@ -58,7 +57,9 @@ const (
 	storageRESTVolumes        = "volumes"
 	storageRESTDirPath        = "dir-path"
 	storageRESTFilePath       = "file-path"
+	storageRESTForceDelMarker = "force-delete-marker"
 	storageRESTVersionID      = "version-id"
+	storageRESTReadData       = "read-data"
 	storageRESTTotalVersions  = "total-versions"
 	storageRESTSrcVolume      = "source-volume"
 	storageRESTSrcPath        = "source-path"
@@ -68,8 +69,8 @@ const (
 	storageRESTOffset         = "offset"
 	storageRESTLength         = "length"
 	storageRESTCount          = "count"
-	storageRESTMarkerPath     = "marker"
 	storageRESTPrefixFilter   = "prefix"
+	storageRESTForwardFilter  = "forward"
 	storageRESTRecursive      = "recursive"
 	storageRESTReportNotFound = "report-notfound"
 	storageRESTBitrotAlgo     = "bitrot-algo"

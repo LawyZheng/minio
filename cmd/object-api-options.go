@@ -66,6 +66,10 @@ func getDefaultOpts(header http.Header, copySource bool, metadata map[string]str
 	if crypto.S3.IsRequested(header) || (metadata != nil && crypto.S3.IsEncrypted(metadata)) {
 		opts.ServerSideEncryption = encrypt.NewSSE()
 	}
+	if v, ok := header[xhttp.MinIOSourceProxyRequest]; ok {
+		opts.ProxyHeaderSet = true
+		opts.ProxyRequest = strings.Join(v, "") == "true"
+	}
 	return
 }
 

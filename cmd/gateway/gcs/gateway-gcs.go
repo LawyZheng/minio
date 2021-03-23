@@ -29,9 +29,8 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"strconv"
-
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,17 +38,16 @@ import (
 	humanize "github.com/dustin/go-humanize"
 	"github.com/minio/cli"
 	miniogopolicy "github.com/minio/minio-go/v7/pkg/policy"
+	minio "github.com/minio/minio/cmd"
 	"github.com/minio/minio/cmd/logger"
 	"github.com/minio/minio/pkg/auth"
 	"github.com/minio/minio/pkg/bucket/policy"
 	"github.com/minio/minio/pkg/bucket/policy/condition"
 	"github.com/minio/minio/pkg/env"
-
+	"github.com/minio/minio/pkg/madmin"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
-
-	minio "github.com/minio/minio/cmd"
 )
 
 var (
@@ -341,7 +339,7 @@ type gcsGateway struct {
 	minio.GatewayUnsupported
 	client     *storage.Client
 	httpClient *http.Client
-	metrics    *minio.Metrics
+	metrics    *minio.BackendMetrics
 	projectID  string
 }
 
@@ -359,7 +357,7 @@ func gcsParseProjectID(credsFile string) (projectID string, err error) {
 }
 
 // GetMetrics returns this gateway's metrics
-func (l *gcsGateway) GetMetrics(ctx context.Context) (*minio.Metrics, error) {
+func (l *gcsGateway) GetMetrics(ctx context.Context) (*minio.BackendMetrics, error) {
 	return l.metrics, nil
 }
 
@@ -413,7 +411,7 @@ func (l *gcsGateway) Shutdown(ctx context.Context) error {
 
 // StorageInfo - Not relevant to GCS backend.
 func (l *gcsGateway) StorageInfo(ctx context.Context) (si minio.StorageInfo, _ []error) {
-	si.Backend.Type = minio.BackendGateway
+	si.Backend.Type = madmin.Gateway
 	si.Backend.GatewayOnline = minio.IsBackendOnline(ctx, "storage.googleapis.com:443")
 	return si, nil
 }
@@ -751,7 +749,7 @@ func (l *gcsGateway) GetObjectNInfo(ctx context.Context, bucket, object string, 
 
 	pr, pw := io.Pipe()
 	go func() {
-		err := l.GetObject(ctx, bucket, object, startOffset, length, pw, objInfo.ETag, opts)
+		err := l.getObject(ctx, bucket, object, startOffset, length, pw, objInfo.ETag, opts)
 		pw.CloseWithError(err)
 	}()
 	// Setup cleanup function to cause the above go-routine to
@@ -766,7 +764,7 @@ func (l *gcsGateway) GetObjectNInfo(ctx context.Context, bucket, object string, 
 //
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
-func (l *gcsGateway) GetObject(ctx context.Context, bucket string, key string, startOffset int64, length int64, writer io.Writer, etag string, opts minio.ObjectOptions) error {
+func (l *gcsGateway) getObject(ctx context.Context, bucket string, key string, startOffset int64, length int64, writer io.Writer, etag string, opts minio.ObjectOptions) error {
 	// if we want to mimic S3 behavior exactly, we need to verify if bucket exists first,
 	// otherwise gcs will just return object not exist in case of non-existing bucket
 	if _, err := l.client.Bucket(bucket).Attrs(ctx); err != nil {

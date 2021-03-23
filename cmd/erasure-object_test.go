@@ -19,7 +19,9 @@ package cmd
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"errors"
+	"io"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -194,6 +196,13 @@ func TestErasureDeleteObjectsErasureSet(t *testing.T) {
 }
 
 func TestErasureDeleteObjectDiskNotFound(t *testing.T) {
+	restoreGlobalStorageClass := globalStorageClass
+	defer func() {
+		globalStorageClass = restoreGlobalStorageClass
+	}()
+
+	globalStorageClass = storageclass.Config{}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -228,7 +237,7 @@ func TestErasureDeleteObjectDiskNotFound(t *testing.T) {
 	erasureDisks := xl.getDisks()
 	z.serverPools[0].erasureDisksMu.Lock()
 	xl.getDisks = func() []StorageAPI {
-		for i := range erasureDisks[:7] {
+		for i := range erasureDisks[:4] {
 			erasureDisks[i] = newNaughtyDisk(erasureDisks[i], nil, errFaultyDisk)
 		}
 		return erasureDisks
@@ -288,9 +297,13 @@ func TestGetObjectNoQuorum(t *testing.T) {
 	bucket := "bucket"
 	object := "object"
 	opts := ObjectOptions{}
+	buf := make([]byte, 129<<10)
+	if _, err = io.ReadFull(crand.Reader, buf); err != nil {
+		t.Fatal(err)
+	}
 
 	// Test use case 1: All disks are online, xl.meta are present, but data are missing
-	_, err = obj.PutObject(ctx, bucket, object, mustGetPutObjReader(t, bytes.NewReader([]byte("abcd")), int64(len("abcd")), "", ""), opts)
+	_, err = obj.PutObject(ctx, bucket, object, mustGetPutObjReader(t, bytes.NewReader(buf), int64(len(buf)), "", ""), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +317,7 @@ func TestGetObjectNoQuorum(t *testing.T) {
 		}
 	}
 
-	err = xl.GetObject(ctx, bucket, object, 0, int64(len("abcd")), ioutil.Discard, "", opts)
+	err = xl.GetObject(ctx, bucket, object, 0, int64(len(buf)), ioutil.Discard, "", opts)
 	if err != toObjectErr(errFileNotFound, bucket, object) {
 		t.Errorf("Expected GetObject to fail with %v, but failed with %v", toObjectErr(errErasureWriteQuorum, bucket, object), err)
 	}
@@ -315,7 +328,7 @@ func TestGetObjectNoQuorum(t *testing.T) {
 	// invocations, where f - [0,2)
 
 	// Create "object" under "bucket".
-	_, err = obj.PutObject(ctx, bucket, object, mustGetPutObjReader(t, bytes.NewReader([]byte("abcd")), int64(len("abcd")), "", ""), opts)
+	_, err = obj.PutObject(ctx, bucket, object, mustGetPutObjReader(t, bytes.NewReader(buf), int64(len(buf)), "", ""), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,6 +508,8 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 		globalStorageClass = restoreGlobalStorageClass
 	}()
 
+	globalStorageClass = storageclass.Config{}
+
 	bucket := getRandomBucketName()
 
 	var opts ObjectOptions
@@ -521,8 +536,7 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 		t.Fatalf("Failed to putObject %v", err)
 	}
 
-	parts1, errs1 := readAllFileInfo(ctx, erasureDisks, bucket, object1, "")
-
+	parts1, errs1 := readAllFileInfo(ctx, erasureDisks, bucket, object1, "", false)
 	parts1SC := globalStorageClass
 
 	// Object for test case 2 - No StorageClass defined, MetaData in PutObject requesting RRS Class
@@ -534,7 +548,7 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 		t.Fatalf("Failed to putObject %v", err)
 	}
 
-	parts2, errs2 := readAllFileInfo(ctx, erasureDisks, bucket, object2, "")
+	parts2, errs2 := readAllFileInfo(ctx, erasureDisks, bucket, object2, "", false)
 	parts2SC := globalStorageClass
 
 	// Object for test case 3 - No StorageClass defined, MetaData in PutObject requesting Standard Storage Class
@@ -546,7 +560,7 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 		t.Fatalf("Failed to putObject %v", err)
 	}
 
-	parts3, errs3 := readAllFileInfo(ctx, erasureDisks, bucket, object3, "")
+	parts3, errs3 := readAllFileInfo(ctx, erasureDisks, bucket, object3, "", false)
 	parts3SC := globalStorageClass
 
 	// Object for test case 4 - Standard StorageClass defined as Parity 6, MetaData in PutObject requesting Standard Storage Class
@@ -564,7 +578,7 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 		t.Fatalf("Failed to putObject %v", err)
 	}
 
-	parts4, errs4 := readAllFileInfo(ctx, erasureDisks, bucket, object4, "")
+	parts4, errs4 := readAllFileInfo(ctx, erasureDisks, bucket, object4, "", false)
 	parts4SC := storageclass.Config{
 		Standard: storageclass.StorageClass{
 			Parity: 6,
@@ -587,7 +601,7 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 		t.Fatalf("Failed to putObject %v", err)
 	}
 
-	parts5, errs5 := readAllFileInfo(ctx, erasureDisks, bucket, object5, "")
+	parts5, errs5 := readAllFileInfo(ctx, erasureDisks, bucket, object5, "", false)
 	parts5SC := storageclass.Config{
 		RRS: storageclass.StorageClass{
 			Parity: 2,
@@ -609,7 +623,7 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 		t.Fatalf("Failed to putObject %v", err)
 	}
 
-	parts6, errs6 := readAllFileInfo(ctx, erasureDisks, bucket, object6, "")
+	parts6, errs6 := readAllFileInfo(ctx, erasureDisks, bucket, object6, "", false)
 	parts6SC := storageclass.Config{
 		RRS: storageclass.StorageClass{
 			Parity: 2,
@@ -620,7 +634,7 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 	// Reset global storage class flags
 	object7 := "object7"
 	metadata7 := make(map[string]string)
-	metadata7["x-amz-storage-class"] = storageclass.RRS
+	metadata7["x-amz-storage-class"] = storageclass.STANDARD
 	globalStorageClass = storageclass.Config{
 		Standard: storageclass.StorageClass{
 			Parity: 5,
@@ -632,7 +646,7 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 		t.Fatalf("Failed to putObject %v", err)
 	}
 
-	parts7, errs7 := readAllFileInfo(ctx, erasureDisks, bucket, object7, "")
+	parts7, errs7 := readAllFileInfo(ctx, erasureDisks, bucket, object7, "", false)
 	parts7SC := storageclass.Config{
 		Standard: storageclass.StorageClass{
 			Parity: 5,
@@ -647,19 +661,19 @@ func testObjectQuorumFromMeta(obj ObjectLayer, instanceType string, dirs []strin
 		storageClassCfg     storageclass.Config
 		expectedError       error
 	}{
-		{parts1, errs1, 8, 9, parts1SC, nil},
+		{parts1, errs1, 12, 12, parts1SC, nil},
 		{parts2, errs2, 14, 14, parts2SC, nil},
-		{parts3, errs3, 8, 9, parts3SC, nil},
+		{parts3, errs3, 12, 12, parts3SC, nil},
 		{parts4, errs4, 10, 10, parts4SC, nil},
 		{parts5, errs5, 14, 14, parts5SC, nil},
-		{parts6, errs6, 8, 9, parts6SC, nil},
-		{parts7, errs7, 14, 14, parts7SC, nil},
+		{parts6, errs6, 12, 12, parts6SC, nil},
+		{parts7, errs7, 11, 11, parts7SC, nil},
 	}
 	for _, tt := range tests {
 		tt := tt
 		t.(*testing.T).Run("", func(t *testing.T) {
 			globalStorageClass = tt.storageClassCfg
-			actualReadQuorum, actualWriteQuorum, err := objectQuorumFromMeta(ctx, *xl, tt.parts, tt.errs)
+			actualReadQuorum, actualWriteQuorum, err := objectQuorumFromMeta(ctx, tt.parts, tt.errs, getDefaultParityBlocks(len(erasureDisks)))
 			if tt.expectedError != nil && err == nil {
 				t.Errorf("Expected %s, got %s", tt.expectedError, err)
 			}

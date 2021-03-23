@@ -17,13 +17,13 @@
 package cmd
 
 import (
+	"crypto/sha256"
 	"errors"
 	"hash"
 	"io"
 
 	"github.com/minio/highwayhash"
 	"github.com/minio/minio/cmd/logger"
-	sha256 "github.com/minio/sha256-simd"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -96,16 +96,16 @@ func BitrotAlgorithmFromString(s string) (a BitrotAlgorithm) {
 	return
 }
 
-func newBitrotWriter(disk StorageAPI, volume, filePath string, length int64, algo BitrotAlgorithm, shardSize int64) io.Writer {
+func newBitrotWriter(disk StorageAPI, volume, filePath string, length int64, algo BitrotAlgorithm, shardSize int64, heal bool) io.Writer {
 	if algo == HighwayHash256S {
-		return newStreamingBitrotWriter(disk, volume, filePath, length, algo, shardSize)
+		return newStreamingBitrotWriter(disk, volume, filePath, length, algo, shardSize, heal)
 	}
 	return newWholeBitrotWriter(disk, volume, filePath, algo, shardSize)
 }
 
-func newBitrotReader(disk StorageAPI, bucket string, filePath string, tillOffset int64, algo BitrotAlgorithm, sum []byte, shardSize int64) io.ReaderAt {
+func newBitrotReader(disk StorageAPI, data []byte, bucket string, filePath string, tillOffset int64, algo BitrotAlgorithm, sum []byte, shardSize int64) io.ReaderAt {
 	if algo == HighwayHash256S {
-		return newStreamingBitrotReader(disk, bucket, filePath, tillOffset, algo, shardSize)
+		return newStreamingBitrotReader(disk, data, bucket, filePath, tillOffset, algo, shardSize)
 	}
 	return newWholeBitrotReader(disk, bucket, filePath, algo, tillOffset, sum)
 }

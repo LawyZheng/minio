@@ -672,8 +672,8 @@ func (s *peerRESTServer) PutBucketNotificationHandler(w http.ResponseWriter, r *
 func getLocalDiskIDs(z *erasureServerPools) []string {
 	var ids []string
 
-	for zoneIdx := range z.serverPools {
-		for _, set := range z.serverPools[zoneIdx].sets {
+	for poolIdx := range z.serverPools {
+		for _, set := range z.serverPools[poolIdx].sets {
 			disks := set.getDisks()
 			for _, disk := range disks {
 				if disk == nil {
@@ -782,13 +782,17 @@ func (s *peerRESTServer) SignalServiceHandler(w http.ResponseWriter, r *http.Req
 	case serviceStop:
 		globalServiceSignalCh <- signal
 	case serviceReloadDynamic:
-		srvCfg, err := getValidConfig(newObjectLayerFn())
+		objAPI := newObjectLayerFn()
+		if objAPI == nil {
+			s.writeErrorResponse(w, errServerNotInitialized)
+			return
+		}
+		srvCfg, err := getValidConfig(objAPI)
 		if err != nil {
 			s.writeErrorResponse(w, err)
 			return
 		}
-		err = applyDynamicConfig(r.Context(), srvCfg)
-		if err != nil {
+		if err = applyDynamicConfig(r.Context(), objAPI, srvCfg); err != nil {
 			s.writeErrorResponse(w, err)
 		}
 		return
@@ -801,7 +805,7 @@ func (s *peerRESTServer) SignalServiceHandler(w http.ResponseWriter, r *http.Req
 // ListenHandler sends http trace messages back to peer rest client
 func (s *peerRESTServer) ListenHandler(w http.ResponseWriter, r *http.Request) {
 	if !s.IsValid(w, r) {
-		s.writeErrorResponse(w, errors.New("Invalid request"))
+		s.writeErrorResponse(w, errors.New("invalid request"))
 		return
 	}
 
@@ -809,7 +813,7 @@ func (s *peerRESTServer) ListenHandler(w http.ResponseWriter, r *http.Request) {
 
 	var prefix string
 	if len(values[peerRESTListenPrefix]) > 1 {
-		s.writeErrorResponse(w, errors.New("Invalid request"))
+		s.writeErrorResponse(w, errors.New("invalid request"))
 		return
 	}
 
@@ -824,7 +828,7 @@ func (s *peerRESTServer) ListenHandler(w http.ResponseWriter, r *http.Request) {
 
 	var suffix string
 	if len(values[peerRESTListenSuffix]) > 1 {
-		s.writeErrorResponse(w, errors.New("Invalid request"))
+		s.writeErrorResponse(w, errors.New("invalid request"))
 		return
 	}
 
@@ -943,10 +947,9 @@ func (s *peerRESTServer) BackgroundHealStatusHandler(w http.ResponseWriter, r *h
 		s.writeErrorResponse(w, errors.New("invalid request"))
 		return
 	}
-
 	ctx := newContext(r, w, "BackgroundHealStatus")
 
-	state, ok := getLocalBackgroundHealStatus()
+	state, ok := getBackgroundHealStatus(ctx, newObjectLayerFn())
 	if !ok {
 		s.writeErrorResponse(w, errServerNotInitialized)
 		return
@@ -1004,7 +1007,7 @@ func (s *peerRESTServer) IsValid(w http.ResponseWriter, r *http.Request) bool {
 // GetBandwidth gets the bandwidth for the buckets requested.
 func (s *peerRESTServer) GetBandwidth(w http.ResponseWriter, r *http.Request) {
 	if !s.IsValid(w, r) {
-		s.writeErrorResponse(w, errors.New("Invalid request"))
+		s.writeErrorResponse(w, errors.New("invalid request"))
 		return
 	}
 	bucketsString := r.URL.Query().Get("buckets")
@@ -1021,6 +1024,29 @@ func (s *peerRESTServer) GetBandwidth(w http.ResponseWriter, r *http.Request) {
 	if err := enc.Encode(report); err != nil {
 		s.writeErrorResponse(w, errors.New("Encoding report failed: "+err.Error()))
 		return
+	}
+	w.(http.Flusher).Flush()
+}
+
+// GetPeerMetrics gets the metrics to be federated across peers.
+func (s *peerRESTServer) GetPeerMetrics(w http.ResponseWriter, r *http.Request) {
+	if !s.IsValid(w, r) {
+		s.writeErrorResponse(w, errors.New("invalid request"))
+	}
+	w.WriteHeader(http.StatusOK)
+	w.(http.Flusher).Flush()
+
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+
+	enc := gob.NewEncoder(w)
+
+	ch := ReportMetrics(r.Context(), GetGeneratorsForPeer)
+	for m := range ch {
+		if err := enc.Encode(m); err != nil {
+			s.writeErrorResponse(w, errors.New("Encoding metric failed: "+err.Error()))
+			return
+		}
 	}
 	w.(http.Flusher).Flush()
 }
@@ -1064,4 +1090,5 @@ func registerPeerRESTHandlers(router *mux.Router) {
 	subrouter.Methods(http.MethodPost).Path(peerRESTVersionPrefix + peerRESTMethodGetBandwidth).HandlerFunc(httpTraceHdrs(server.GetBandwidth))
 	subrouter.Methods(http.MethodPost).Path(peerRESTVersionPrefix + peerRESTMethodGetMetacacheListing).HandlerFunc(httpTraceHdrs(server.GetMetacacheListingHandler))
 	subrouter.Methods(http.MethodPost).Path(peerRESTVersionPrefix + peerRESTMethodUpdateMetacacheListing).HandlerFunc(httpTraceHdrs(server.UpdateMetacacheListingHandler))
+	subrouter.Methods(http.MethodPost).Path(peerRESTVersionPrefix + peerRESTMethodGetPeerMetrics).HandlerFunc(httpTraceHdrs(server.GetPeerMetrics))
 }

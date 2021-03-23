@@ -33,6 +33,7 @@ import (
 	"github.com/klauspost/compress/zip"
 	"github.com/minio/minio-go/v7/pkg/set"
 	"github.com/minio/minio/cmd/crypto"
+	xhttp "github.com/minio/minio/cmd/http"
 	"github.com/minio/minio/cmd/logger"
 	bandwidth "github.com/minio/minio/pkg/bandwidth"
 	bucketBandwidth "github.com/minio/minio/pkg/bucket/bandwidth"
@@ -51,8 +52,8 @@ type NotificationSys struct {
 	targetResCh                chan event.TargetIDResult
 	bucketRulesMap             map[string]event.RulesMap
 	bucketRemoteTargetRulesMap map[string]map[event.TargetID]event.RulesMap
-	peerClients                []*peerRESTClient
-	allPeerClients             []*peerRESTClient
+	peerClients                []*peerRESTClient // Excludes self
+	allPeerClients             []*peerRESTClient // Includes nil client for self
 }
 
 // GetARNList - returns available ARNs.
@@ -335,6 +336,7 @@ func (sys *NotificationSys) DownloadProfilingData(ctx context.Context, writer io
 				logger.LogIf(ctx, zerr)
 				continue
 			}
+			header.Method = zip.Deflate
 			zwriter, zerr := zipWriter.CreateHeader(header)
 			if zerr != nil {
 				reqInfo := (&logger.ReqInfo{}).AppendTags("peerAddress", client.host.String())
@@ -381,6 +383,7 @@ func (sys *NotificationSys) DownloadProfilingData(ctx context.Context, writer io
 		if zerr != nil {
 			return profilingDataFound
 		}
+		header.Method = zip.Deflate
 
 		zwriter, zerr := zipWriter.CreateHeader(header)
 		if zerr != nil {
@@ -465,7 +468,7 @@ func (sys *NotificationSys) updateBloomFilter(ctx context.Context, current uint6
 			defer mu.Unlock()
 
 			if err != nil || !serverBF.Complete || bf == nil {
-				logger.LogIf(ctx, err)
+				logger.LogOnceIf(ctx, err, fmt.Sprintf("host:%s, cycle:%d", client.host, current), client.cycleServerBloomFilter)
 				bf = nil
 				return nil
 			}
@@ -1215,6 +1218,21 @@ func (sys *NotificationSys) ProcInfo(ctx context.Context) []madmin.ServerProcInf
 	return reply
 }
 
+func getOfflineDisks(offlineHost string, endpoints EndpointServerPools) []madmin.Disk {
+	var offlineDisks []madmin.Disk
+	for _, pool := range endpoints {
+		for _, ep := range pool.Endpoints {
+			if offlineHost == ep.Host {
+				offlineDisks = append(offlineDisks, madmin.Disk{
+					Endpoint: ep.String(),
+					State:    string(madmin.ItemOffline),
+				})
+			}
+		}
+	}
+	return offlineDisks
+}
+
 // ServerInfo - calls ServerInfo RPC call on all peers.
 func (sys *NotificationSys) ServerInfo() []madmin.ServerProperties {
 	reply := make([]madmin.ServerProperties, len(sys.peerClients))
@@ -1229,14 +1247,16 @@ func (sys *NotificationSys) ServerInfo() []madmin.ServerProperties {
 			info, err := client.ServerInfo()
 			if err != nil {
 				info.Endpoint = client.host.String()
-				info.State = "offline"
+				info.State = string(madmin.ItemOffline)
+				info.Disks = getOfflineDisks(info.Endpoint, globalEndpoints)
 			} else {
-				info.State = "ok"
+				info.State = string(madmin.ItemOnline)
 			}
 			reply[idx] = info
 		}(client, i)
 	}
 	wg.Wait()
+
 	return reply
 }
 
@@ -1276,6 +1296,9 @@ func (sys *NotificationSys) restClientFromHash(s string) (client *peerRESTClient
 		return nil
 	}
 	peerClients := sys.getOnlinePeers()
+	if len(peerClients) == 0 {
+		return nil
+	}
 	idx := xxhash.Sum64String(s) % uint64(len(peerClients))
 	return peerClients[idx]
 }
@@ -1292,6 +1315,21 @@ func NewNotificationSys(endpoints EndpointServerPools) *NotificationSys {
 		peerClients:                remote,
 		allPeerClients:             all,
 	}
+}
+
+// GetPeerOnlineCount gets the count of online and offline nodes.
+func GetPeerOnlineCount() (nodesOnline, nodesOffline int) {
+	nodesOnline = 1 // Self is always online.
+	nodesOffline = 0
+	servers := globalNotificationSys.ServerInfo()
+	for _, s := range servers {
+		if s.State == string(madmin.ItemOnline) {
+			nodesOnline++
+			continue
+		}
+		nodesOffline++
+	}
+	return
 }
 
 type eventArgs struct {
@@ -1366,6 +1404,10 @@ func (args eventArgs) ToEvent(escape bool) event.Event {
 func sendEvent(args eventArgs) {
 	args.Object.Size, _ = args.Object.GetActualSize()
 
+	// avoid generating a notification for REPLICA creation event.
+	if _, ok := args.ReqParams[xhttp.MinIOSourceReplicationRequest]; ok {
+		return
+	}
 	// remove sensitive encryption entries in metadata.
 	crypto.RemoveSensitiveEntries(args.Object.UserDefined)
 	crypto.RemoveInternalEntries(args.Object.UserDefined)
@@ -1427,4 +1469,53 @@ func (sys *NotificationSys) GetBandwidthReports(ctx context.Context, buckets ...
 		}
 	}
 	return consolidatedReport
+}
+
+// GetClusterMetrics - gets the cluster metrics from all nodes excluding self.
+func (sys *NotificationSys) GetClusterMetrics(ctx context.Context) chan Metric {
+	g := errgroup.WithNErrs(len(sys.peerClients))
+	peerChannels := make([]<-chan Metric, len(sys.peerClients))
+	for index := range sys.peerClients {
+		if sys.peerClients[index] == nil {
+			continue
+		}
+		index := index
+		g.Go(func() error {
+			var err error
+			peerChannels[index], err = sys.peerClients[index].GetPeerMetrics(ctx)
+			return err
+		}, index)
+	}
+
+	ch := make(chan Metric)
+	var wg sync.WaitGroup
+	for index, err := range g.Wait() {
+		reqInfo := (&logger.ReqInfo{}).AppendTags("peerAddress",
+			sys.peerClients[index].host.String())
+		ctx := logger.SetReqInfo(ctx, reqInfo)
+		if err != nil {
+			logger.LogOnceIf(ctx, err, sys.peerClients[index].host.String())
+			continue
+		}
+		wg.Add(1)
+		go func(ctx context.Context, peerChannel <-chan Metric, wg *sync.WaitGroup) {
+			defer wg.Done()
+			for {
+				select {
+				case m, ok := <-peerChannel:
+					if !ok {
+						return
+					}
+					ch <- m
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(ctx, peerChannels[index], &wg)
+	}
+	go func(wg *sync.WaitGroup, ch chan Metric) {
+		wg.Wait()
+		close(ch)
+	}(&wg, ch)
+	return ch
 }

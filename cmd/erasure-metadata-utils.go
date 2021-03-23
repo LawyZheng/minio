@@ -19,6 +19,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/crc32"
 
 	"github.com/minio/minio/cmd/logger"
@@ -115,7 +116,7 @@ func hashOrder(key string, cardinality int) []int {
 
 // Reads all `xl.meta` metadata as a FileInfo slice.
 // Returns error slice indicating the failed metadata reads.
-func readAllFileInfo(ctx context.Context, disks []StorageAPI, bucket, object, versionID string) ([]FileInfo, []error) {
+func readAllFileInfo(ctx context.Context, disks []StorageAPI, bucket, object, versionID string, readData bool) ([]FileInfo, []error) {
 	metadataArray := make([]FileInfo, len(disks))
 
 	g := errgroup.WithNErrs(len(disks))
@@ -126,10 +127,16 @@ func readAllFileInfo(ctx context.Context, disks []StorageAPI, bucket, object, ve
 			if disks[index] == nil {
 				return errDiskNotFound
 			}
-			metadataArray[index], err = disks[index].ReadVersion(ctx, bucket, object, versionID)
+			metadataArray[index], err = disks[index].ReadVersion(ctx, bucket, object, versionID, readData)
 			if err != nil {
-				if !IsErr(err, errFileNotFound, errVolumeNotFound, errFileVersionNotFound, errDiskNotFound) {
-					logger.LogOnceIf(ctx, err, disks[index].String())
+				if !IsErr(err, []error{
+					errFileNotFound,
+					errVolumeNotFound,
+					errFileVersionNotFound,
+					errDiskNotFound,
+				}...) {
+					logger.LogOnceIf(ctx, fmt.Errorf("Drive %s returned an error (%w)", disks[index], err),
+						disks[index].String())
 				}
 			}
 			return err
@@ -140,10 +147,11 @@ func readAllFileInfo(ctx context.Context, disks []StorageAPI, bucket, object, ve
 	return metadataArray, g.Wait()
 }
 
-func shuffleDisksAndPartsMetadataByIndex(disks []StorageAPI, metaArr []FileInfo, distribution []int) (shuffledDisks []StorageAPI, shuffledPartsMetadata []FileInfo) {
+func shuffleDisksAndPartsMetadataByIndex(disks []StorageAPI, metaArr []FileInfo, fi FileInfo) (shuffledDisks []StorageAPI, shuffledPartsMetadata []FileInfo) {
 	shuffledDisks = make([]StorageAPI, len(disks))
 	shuffledPartsMetadata = make([]FileInfo, len(disks))
 	var inconsistent int
+	distribution := fi.Erasure.Distribution
 	for i, meta := range metaArr {
 		if disks[i] == nil {
 			// Assuming offline drives as inconsistent,
@@ -166,7 +174,7 @@ func shuffleDisksAndPartsMetadataByIndex(disks []StorageAPI, metaArr []FileInfo,
 	// Inconsistent meta info is with in the limit of
 	// expected quorum, proceed with EcIndex based
 	// disk order.
-	if inconsistent < len(disks)/2 {
+	if inconsistent < fi.Erasure.ParityBlocks {
 		return shuffledDisks, shuffledPartsMetadata
 	}
 

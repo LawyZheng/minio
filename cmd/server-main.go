@@ -41,6 +41,7 @@ import (
 	"github.com/minio/minio/pkg/color"
 	"github.com/minio/minio/pkg/env"
 	"github.com/minio/minio/pkg/madmin"
+	"github.com/minio/minio/pkg/sync/errgroup"
 )
 
 // ServerFlags - server command specific flags
@@ -139,6 +140,17 @@ func serverHandleCmdArgs(ctx *cli.Context) {
 
 	globalMinioHost, globalMinioPort = mustSplitHostPort(globalMinioAddr)
 	globalEndpoints, setupType, err = createServerEndpoints(globalCLIContext.Addr, serverCmdArgs(ctx)...)
+
+	globalRemoteEndpoints = make(map[string]Endpoint)
+	for _, z := range globalEndpoints {
+		for _, ep := range z.Endpoints {
+			if ep.IsLocal {
+				globalRemoteEndpoints[GetLocalPeer(globalEndpoints)] = ep
+			} else {
+				globalRemoteEndpoints[ep.Host] = ep
+			}
+		}
+	}
 	logger.FatalIf(err, "Invalid command line arguments")
 
 	// allow transport to be HTTP/1.1 for proxying.
@@ -225,6 +237,28 @@ func newAllSubsystems() {
 	globalBucketTargetSys = NewBucketTargetSys()
 }
 
+func configRetriableErrors(err error) bool {
+	// Initializing sub-systems needs a retry mechanism for
+	// the following reasons:
+	//  - Read quorum is lost just after the initialization
+	//    of the object layer.
+	//  - Write quorum not met when upgrading configuration
+	//    version is needed, migration is needed etc.
+	rquorum := InsufficientReadQuorum{}
+	wquorum := InsufficientWriteQuorum{}
+
+	// One of these retriable errors shall be retried.
+	return errors.Is(err, errDiskNotFound) ||
+		errors.Is(err, errConfigNotFound) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, errErasureWriteQuorum) ||
+		errors.Is(err, errErasureReadQuorum) ||
+		errors.As(err, &rquorum) ||
+		errors.As(err, &wquorum) ||
+		isErrBucketNotFound(err) ||
+		errors.Is(err, os.ErrDeadlineExceeded)
+}
+
 func initServer(ctx context.Context, newObject ObjectLayer) error {
 	// Once the config is fully loaded, initialize the new object layer.
 	setObjectLayer(newObject)
@@ -239,15 +273,6 @@ func initServer(ctx context.Context, newObject ObjectLayer) error {
 	// ****  WARNING ****
 	// Migrating to encrypted backend should happen before initialization of any
 	// sub-systems, make sure that we do not move the above codeblock elsewhere.
-
-	// Initializing sub-systems needs a retry mechanism for
-	// the following reasons:
-	//  - Read quorum is lost just after the initialization
-	//    of the object layer.
-	//  - Write quorum not met when upgrading configuration
-	//    version is needed, migration is needed etc.
-	rquorum := InsufficientReadQuorum{}
-	wquorum := InsufficientWriteQuorum{}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -264,7 +289,7 @@ func initServer(ctx context.Context, newObject ObjectLayer) error {
 
 		// let one of the server acquire the lock, if not let them timeout.
 		// which shall be retried again by this loop.
-		if err = txnLk.GetLock(ctx, lockTimeout); err != nil {
+		if _, err = txnLk.GetLock(ctx, lockTimeout); err != nil {
 			logger.Info("Waiting for all MinIO sub-systems to be initialized.. trying to acquire lock")
 
 			time.Sleep(time.Duration(r.Float64() * float64(5*time.Second)))
@@ -295,13 +320,7 @@ func initServer(ctx context.Context, newObject ObjectLayer) error {
 
 		txnLk.Unlock() // Unlock the transaction lock and allow other nodes to acquire the lock if possible.
 
-		// One of these retriable errors shall be retried.
-		if errors.Is(err, errDiskNotFound) ||
-			errors.Is(err, errConfigNotFound) ||
-			errors.Is(err, context.DeadlineExceeded) ||
-			errors.As(err, &rquorum) ||
-			errors.As(err, &wquorum) ||
-			isErrBucketNotFound(err) {
+		if configRetriableErrors(err) {
 			logger.Info("Waiting for all MinIO sub-systems to be initialized.. possible cause (%v)", err)
 			time.Sleep(time.Duration(r.Float64() * float64(5*time.Second)))
 			continue
@@ -319,8 +338,6 @@ func initAllSubsystems(ctx context.Context, newObject ObjectLayer) (err error) {
 	// you want to add extra context to your error. This
 	// ensures top level retry works accordingly.
 	// List buckets to heal, and be re-used for loading configs.
-	rquorum := InsufficientReadQuorum{}
-	wquorum := InsufficientWriteQuorum{}
 
 	buckets, err := newObject.ListBuckets(ctx)
 	if err != nil {
@@ -335,29 +352,31 @@ func initAllSubsystems(ctx context.Context, newObject ObjectLayer) (err error) {
 				logger.Info(fmt.Sprintf("Verifying if %d buckets are consistent across drives...", len(buckets)))
 			}
 		}
-		for _, bucket := range buckets {
-			if _, err = newObject.HealBucket(ctx, bucket.Name, madmin.HealOpts{Recreate: true}); err != nil {
-				return fmt.Errorf("Unable to list buckets to heal: %w", err)
-			}
+
+		// Limit to no more than 50 concurrent buckets.
+		g := errgroup.WithNErrs(len(buckets)).WithConcurrency(50)
+		ctx, cancel := g.WithCancelOnError(ctx)
+		defer cancel()
+		for index := range buckets {
+			index := index
+			g.Go(func() error {
+				_, berr := newObject.HealBucket(ctx, buckets[index].Name, madmin.HealOpts{Recreate: true})
+				return berr
+			}, index)
+		}
+		if err := g.WaitErr(); err != nil {
+			return fmt.Errorf("Unable to list buckets to heal: %w", err)
 		}
 	}
 
 	// Initialize config system.
 	if err = globalConfigSys.Init(newObject); err != nil {
-		if errors.Is(err, errDiskNotFound) ||
-			errors.Is(err, errConfigNotFound) ||
-			errors.Is(err, context.DeadlineExceeded) ||
-			errors.As(err, &rquorum) ||
-			errors.As(err, &wquorum) ||
-			isErrBucketNotFound(err) {
+		if configRetriableErrors(err) {
 			return fmt.Errorf("Unable to initialize config system: %w", err)
 		}
 		// Any other config errors we simply print a message and proceed forward.
 		logger.LogIf(ctx, fmt.Errorf("Unable to initialize config, some features may be missing %w", err))
 	}
-
-	// Initialize IAM store
-	globalIAMSys.InitStore(newObject)
 
 	// Populate existing buckets to the etcd backend
 	if globalDNSConfig != nil {
@@ -484,11 +503,11 @@ func serverMain(ctx *cli.Context) {
 	// Enable background operations for erasure coding
 	if globalIsErasure {
 		initAutoHeal(GlobalContext, newObject)
-		initBackgroundReplication(GlobalContext, newObject)
 		initBackgroundTransition(GlobalContext, newObject)
+		initBackgroundExpiry(GlobalContext, newObject)
 	}
 
-	initDataCrawler(GlobalContext, newObject)
+	initDataScanner(GlobalContext, newObject)
 
 	if err = initServer(GlobalContext, newObject); err != nil {
 		var cerr config.Err
@@ -504,6 +523,9 @@ func serverMain(ctx *cli.Context) {
 		}
 	}
 
+	if globalIsErasure { // to be done after config init
+		initBackgroundReplication(GlobalContext, newObject)
+	}
 	if globalCacheConfig.Enabled {
 		// initialize the new disk cache objects.
 		var cacheAPI CacheObjectLayer

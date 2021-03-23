@@ -232,15 +232,16 @@ func (m metaCacheEntries) resolve(r *metadataResolutionParams) (selected *metaCa
 		}
 	}
 
-	// If directory, we need quorum.
-	if dirExists > 0 && dirExists < r.dirQuorum {
+	if selected == nil {
 		return nil, false
 	}
-	if objExists < r.objQuorum {
+
+	if selected.isDir() && dirExists < r.dirQuorum {
+		return nil, false
+	} else if !selected.isDir() && objExists < r.objQuorum {
 		return nil, false
 	}
-	// Take the latest selected.
-	return selected, selected != nil
+	return selected, true
 }
 
 // firstFound returns the first found and the number of set entries.
@@ -330,16 +331,23 @@ func (m *metaCacheEntriesSorted) fileInfoVersions(bucket, prefix, delimiter, aft
 			}
 
 			fiv, err := entry.fileInfoVersions(bucket)
+			if err != nil {
+				continue
+			}
+
+			fiVersions := fiv.Versions
 			if afterV != "" {
-				// Forward first entry to specified version
-				fiv.forwardPastVersion(afterV)
+				vidMarkerIdx := fiv.findVersionIndex(afterV)
+				if vidMarkerIdx >= 0 {
+					fiVersions = fiVersions[vidMarkerIdx+1:]
+				}
 				afterV = ""
 			}
-			if err == nil {
-				for _, version := range fiv.Versions {
-					versions = append(versions, version.ToObjectInfo(bucket, entry.name))
-				}
+
+			for _, version := range fiVersions {
+				versions = append(versions, version.ToObjectInfo(bucket, entry.name))
 			}
+
 			continue
 		}
 
@@ -431,6 +439,17 @@ func (m *metaCacheEntriesSorted) forwardTo(s string) {
 	}
 	idx := sort.Search(len(m.o), func(i int) bool {
 		return m.o[i].name >= s
+	})
+	m.o = m.o[idx:]
+}
+
+// forwardPast will truncate m so only entries that are after s is in the list.
+func (m *metaCacheEntriesSorted) forwardPast(s string) {
+	if s == "" {
+		return
+	}
+	idx := sort.Search(len(m.o), func(i int) bool {
+		return m.o[i].name > s
 	})
 	m.o = m.o[idx:]
 }
